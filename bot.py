@@ -607,618 +607,421 @@ async def meme(interaction: discord.Interaction, category: str = "random"):
 # ══════════════════════════════════════════════════════════
 class TicketCategorySelect(discord.ui.Select):
     def __init__(self):
-        options = [
-            discord.SelectOption(label="General Support", description="General questions and help",  emoji="❓"),
-            discord.SelectOption(label="Report User",     description="Report rule violations",       emoji="🚨"),
-            discord.SelectOption(label="Partnership",     description="Partnership inquiries",         emoji="🤝"),
-            discord.SelectOption(label="Bug Report",      description="Report bugs or issues",         emoji="🐛"),
-            discord.SelectOption(label="Other",           description="Other inquiries",               emoji="📝"),
-        ]
-        super().__init__(placeholder="Select ticket category...", options=options, custom_id="ticket_category_select")
+        super().__init__(
+            placeholder="📂  Choose a category...",
+            custom_id="ticket_cat_select",
+            options=[
+                discord.SelectOption(label="General Support", description="Questions and general help",     emoji="❓"),
+                discord.SelectOption(label="Report User",     description="Report someone breaking rules",  emoji="🚨"),
+                discord.SelectOption(label="Partnership",     description="Partnership inquiries",           emoji="🤝"),
+                discord.SelectOption(label="Bug Report",      description="Report a bug or issue",           emoji="🐛"),
+                discord.SelectOption(label="Other",           description="Anything else",                   emoji="📝"),
+            ]
+        )
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-
         global ticket_counter
         ticket_counter += 1
-
-        selected_category = self.values[0]
-        guild = interaction.guild
-        category = discord.utils.get(guild.categories, name="Tickets")
+        num        = str(ticket_counter).zfill(4)
+        cat        = self.values[0]
+        guild      = interaction.guild
         staff_role = discord.utils.get(guild.roles, name=STAFF_ROLE_NAME)
+        cat_folder = discord.utils.get(guild.categories, name="📩 Tickets") or \
+                     await guild.create_category("📩 Tickets")
 
-        if not category:
-            category = await guild.create_category("Tickets")
-
-        channel = await guild.create_text_channel(
-            f"ticket-{str(ticket_counter).zfill(4)}",
-            category=category
+        ch = await guild.create_text_channel(
+            f"ticket-{num}",
+            category=cat_folder,
+            topic=f"Ticket #{num} | {cat} | {interaction.user.id}"
         )
-
-        await channel.set_permissions(guild.default_role, read_messages=False)
-        await channel.set_permissions(interaction.user, read_messages=True, send_messages=True)
+        await ch.set_permissions(guild.default_role, read_messages=False)
+        await ch.set_permissions(interaction.user,   read_messages=True, send_messages=True)
         if staff_role:
-            await channel.set_permissions(staff_role, read_messages=True, send_messages=True)
+            await ch.set_permissions(staff_role, read_messages=True, send_messages=True)
 
-        welcome_text = f"{interaction.user.mention}"
+        cat_emojis = {"General Support":"❓","Report User":"🚨","Partnership":"🤝","Bug Report":"🐛","Other":"📝"}
+        cat_emoji  = cat_emojis.get(cat, "🎟️")
+        ts         = int(datetime.utcnow().timestamp())
 
-        cat_emojis = {
-            "General Support": "❓", "Report User": "🚨",
-            "Partnership": "🤝", "Bug Report": "🐛", "Other": "📝"
-        }
-        cat_emoji = cat_emojis.get(selected_category, "🎟️")
-        num = str(ticket_counter).zfill(4)
-        ts  = int(datetime.utcnow().timestamp())
-
-        embed = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-        embed.description = (
-            f"## {cat_emoji}  {selected_category}\n"
-            f"> Welcome {interaction.user.mention}! A member of staff will be with you shortly.\n"
-            f"> Please describe your issue in as much detail as possible.\n\u200b"
+        # ── Main ticket embed ──────────────────────────────────
+        e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+        e.set_author(
+            name=f"{guild.name}  ·  Ticket #{num}",
+            icon_url=guild.icon.url if guild.icon else None
         )
-        embed.set_author(
-            name=f"Ticket #{num}  ·  {interaction.guild.name}",
-            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+        e.description = (
+            f"### {cat_emoji}  {cat}\n"
+            f"> Hey {interaction.user.mention}, thanks for opening a ticket!\n"
+            f"> A staff member will be with you shortly.\n"
+            f"> Please describe your issue below.\n\u200b"
         )
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        embed.add_field(name="👤  User",      value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=True)
-        embed.add_field(name="📂  Category",  value=f"{cat_emoji} {selected_category}",                     inline=True)
-        embed.add_field(name="🟢  Status",    value="Open",                                                   inline=True)
-        embed.add_field(name="📅  Opened",    value=f"<t:{ts}:F>",                                           inline=True)
-        embed.add_field(name="🗓️  Joined",    value=f"<t:{int(interaction.user.joined_at.timestamp())}:R>",  inline=True)
-        embed.add_field(name="🎟️  Ticket",    value=f"`#{num}`",                                             inline=True)
-        embed.set_image(url=TICKET_BANNER)
-        embed.set_footer(text=f"Crimson Gen  ·  Ticket #{num}", icon_url=interaction.guild.me.display_avatar.url)
+        e.set_thumbnail(url=interaction.user.display_avatar.url)
+        e.add_field(name="👤  User",      value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=True)
+        e.add_field(name="📂  Category",  value=f"{cat_emoji}  {cat}",                                   inline=True)
+        e.add_field(name="🟢  Status",    value="Open",                                                    inline=True)
+        e.add_field(name="📅  Opened",    value=f"<t:{ts}:R>",                                            inline=True)
+        e.add_field(name="🎟️  Ticket",    value=f"`#{num}`",                                              inline=True)
+        e.add_field(name="\u200b",       value="\u200b",                                                inline=True)
+        e.set_image(url=TICKET_BANNER)
+        e.set_footer(text=f"Crimson Gen  ·  Ticket #{num}", icon_url=guild.me.display_avatar.url)
+        await ch.send(content=interaction.user.mention, embed=e, view=TicketActionsView())
 
-        await channel.send(content=welcome_text, embed=embed, view=TicketActionsView())
-
+        # ── Staff info embed ───────────────────────────────────
         if staff_role:
-            info_embed = discord.Embed(color=0x2b2d31, timestamp=datetime.utcnow())
-            info_embed.description = (
-                f"## 📋  Staff Info — Ticket #{num}\n"
-                f"> New ticket opened and awaiting staff response."
+            si = discord.Embed(color=0x2b2d31, timestamp=datetime.utcnow())
+            si.set_author(
+                name="New Ticket  ·  Staff Panel",
+                icon_url=guild.me.display_avatar.url
             )
-            info_embed.set_thumbnail(url=interaction.user.display_avatar.url)
-            info_embed.add_field(name="👤  Creator",   value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=True)
-            info_embed.add_field(name="📂  Category",  value=f"{cat_emoji} {selected_category}",                     inline=True)
-            info_embed.add_field(name="🎟️  Ticket #",  value=f"`#{num}`",                                            inline=True)
-            info_embed.add_field(name="📅  Opened",    value=f"<t:{ts}:R>",                                          inline=True)
-            info_embed.add_field(name="🟢  Status",    value="Open",                                                  inline=True)
-            info_embed.add_field(name="\u200b",        value="\u200b",                                               inline=True)
-            info_embed.set_footer(
-                text=f"Crimson Gen  ·  Ticket #{num}",
-                icon_url=interaction.guild.me.display_avatar.url
-            )
-            await channel.send(embed=info_embed, view=StaffTicketInfoView())
+            si.set_thumbnail(url=interaction.user.display_avatar.url)
+            si.add_field(name="👤  Creator",   value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=True)
+            si.add_field(name="📂  Category",  value=f"{cat_emoji}  {cat}",                                   inline=True)
+            si.add_field(name="🎟️  Ticket #",  value=f"`#{num}`",                                             inline=True)
+            si.add_field(name="📅  Opened",    value=f"<t:{ts}:F>",                                           inline=True)
+            si.add_field(name="🟢  Status",    value="Open",                                                   inline=True)
+            si.add_field(name="\u200b",       value="\u200b",                                               inline=True)
+            si.set_footer(text=f"Crimson Gen  ·  Ticket #{num}", icon_url=guild.me.display_avatar.url)
+            await ch.send(content=f"👁️ {staff_role.mention}", embed=si, view=StaffTicketInfoView())
 
-        ticket_creators[channel.id] = interaction.user.id
-        await interaction.followup.send(f"✅ Your ticket has been created: {channel.mention}", ephemeral=True)
-
-
-class StaffTicketInfoView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Add User",    style=discord.ButtonStyle.green, custom_id="staff_add_user")
-    async def add_user(self, interaction: discord.Interaction, button: discord.ui.Button):
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
-        if not staff_role or staff_role not in interaction.user.roles:
-            await interaction.response.send_message("❌ Only staff can use this button.", ephemeral=True)
-            return
-        await interaction.response.send_modal(ManageUsersModal())
-
-    @discord.ui.button(label="Remove User", style=discord.ButtonStyle.red,   custom_id="staff_remove_user")
-    async def remove_user(self, interaction: discord.Interaction, button: discord.ui.Button):
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
-        if not staff_role or staff_role not in interaction.user.roles:
-            await interaction.response.send_message("❌ Only staff can use this button.", ephemeral=True)
-            return
-        await interaction.response.send_modal(RemoveUserModal())
-
-
-class TicketPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(TicketCategorySelect())
-
-
-class TicketActionsView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="View Info",    emoji="🔍", style=discord.ButtonStyle.gray,    custom_id="ticket_view",   row=0)
-    async def view_info(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            f"📊 **Ticket Information**\n"
-            f"Channel: {interaction.channel.mention}\n"
-            f"Created: <t:{int(interaction.channel.created_at.timestamp())}:R>",
+        ticket_creators[ch.id] = interaction.user.id
+        await interaction.followup.send(
+            embed=discord.Embed(color=C_SUCCESS, description=f"✅  Your ticket is ready: {ch.mention}"),
             ephemeral=True
         )
 
-    @discord.ui.button(label="Rename",       emoji="✏️",  style=discord.ButtonStyle.primary, custom_id="ticket_rename", row=0)
-    async def rename(self, interaction: discord.Interaction, button: discord.ui.Button):
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
-        is_staff_user = (staff_role and staff_role in interaction.user.roles) or interaction.user.guild_permissions.administrator
-        if not is_staff_user:
-            await interaction.response.send_message("❌ Only staff or support roles can rename tickets!", ephemeral=True)
-            return
-        await interaction.response.send_modal(RenameTicketModal())
 
-    @discord.ui.button(label="Close",        emoji="🔒", style=discord.ButtonStyle.red,     custom_id="ticket_close",  row=0)
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
-        is_staff_user = (staff_role and staff_role in interaction.user.roles) or interaction.user.guild_permissions.administrator
-        is_creator = interaction.channel.overwrites_for(interaction.user).read_messages is True
-        if not is_staff_user and not is_creator:
-            await interaction.response.send_message("❌ Only staff or the ticket creator can close tickets!", ephemeral=True)
-            return
-        await interaction.response.send_modal(CloseReasonModal())
+class TicketPanelView(discord.ui.View):
+    def __init__(self): super().__init__(timeout=None); self.add_item(TicketCategorySelect())
 
-    @discord.ui.button(label="Manage Users", emoji="👥", style=discord.ButtonStyle.gray,    custom_id="ticket_users",  row=1)
-    async def manage_users(self, interaction: discord.Interaction, button: discord.ui.Button):
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
-        is_staff_user = (staff_role and staff_role in interaction.user.roles) or interaction.user.guild_permissions.administrator
-        if not is_staff_user:
-            await interaction.response.send_message("❌ Only staff or support roles can manage users!", ephemeral=True)
-            return
-        await interaction.response.send_modal(ManageUsersModal())
 
-    @discord.ui.button(label="Claim",        emoji="⭐", style=discord.ButtonStyle.green,   custom_id="ticket_claim",  row=1)
-    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
-        is_staff_user = (staff_role and staff_role in interaction.user.roles) or interaction.user.guild_permissions.administrator
-        if not is_staff_user:
-            await interaction.response.send_message("❌ Only staff or support roles can claim tickets!", ephemeral=True)
-            return
-        await interaction.response.send_message(f"⭐ {interaction.user.mention} has claimed this ticket!")
+class StaffTicketInfoView(discord.ui.View):
+    def __init__(self): super().__init__(timeout=None)
 
-    @discord.ui.button(label="Delete",       emoji="🗑️", style=discord.ButtonStyle.red,     custom_id="ticket_delete", row=1)
-    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
-        is_staff_user = (staff_role and staff_role in interaction.user.roles) or interaction.user.guild_permissions.administrator
-        if not is_staff_user:
-            await interaction.response.send_message("❌ Only administrators or support roles can delete tickets!", ephemeral=True)
-            return
-        await interaction.response.send_message("🗑️ Deleting ticket in 5 seconds...")
+    @discord.ui.button(label="Add User",    emoji="➕", style=discord.ButtonStyle.green, custom_id="staff_add_user")
+    async def add_user(self, i: discord.Interaction, b):
+        staff_role = discord.utils.get(i.guild.roles, name=STAFF_ROLE_NAME)
+        if not (staff_role and staff_role in i.user.roles) and not i.user.guild_permissions.administrator:
+            return await i.response.send_message("❌ Staff only.", ephemeral=True)
+        await i.response.send_modal(ManageUsersModal())
+
+    @discord.ui.button(label="Remove User", emoji="➖", style=discord.ButtonStyle.red,   custom_id="staff_remove_user")
+    async def remove_user(self, i: discord.Interaction, b):
+        staff_role = discord.utils.get(i.guild.roles, name=STAFF_ROLE_NAME)
+        if not (staff_role and staff_role in i.user.roles) and not i.user.guild_permissions.administrator:
+            return await i.response.send_message("❌ Staff only.", ephemeral=True)
+        await i.response.send_modal(RemoveUserModal())
+
+
+class TicketActionsView(discord.ui.View):
+    def __init__(self): super().__init__(timeout=None)
+
+    def _is_staff(self, i): 
+        sr = discord.utils.get(i.guild.roles, name=STAFF_ROLE_NAME)
+        return (sr and sr in i.user.roles) or i.user.guild_permissions.administrator
+
+    @discord.ui.button(label="Rename",  emoji="✏️",  style=discord.ButtonStyle.primary, custom_id="t_rename",  row=0)
+    async def rename(self, i: discord.Interaction, b):
+        if not self._is_staff(i): return await i.response.send_message("❌ Staff only.", ephemeral=True)
+        await i.response.send_modal(RenameTicketModal())
+
+    @discord.ui.button(label="Close",   emoji="🔒", style=discord.ButtonStyle.red,     custom_id="t_close",   row=0)
+    async def close_ticket(self, i: discord.Interaction, b):
+        is_creator = i.channel.overwrites_for(i.user).read_messages is True
+        if not self._is_staff(i) and not is_creator:
+            return await i.response.send_message("❌ Only staff or the ticket creator can close.", ephemeral=True)
+        await i.response.send_modal(CloseReasonModal())
+
+    @discord.ui.button(label="Claim",   emoji="⭐", style=discord.ButtonStyle.green,   custom_id="t_claim",   row=0)
+    async def claim(self, i: discord.Interaction, b):
+        if not self._is_staff(i): return await i.response.send_message("❌ Staff only.", ephemeral=True)
+        e = discord.Embed(color=C_SUCCESS, description=f"⭐  {i.user.mention} has claimed this ticket.", timestamp=datetime.utcnow())
+        e.set_footer(text="Crimson Gen  ·  Tickets", icon_url=i.guild.me.display_avatar.url)
+        await i.response.send_message(embed=e)
+
+    @discord.ui.button(label="Add User", emoji="➕", style=discord.ButtonStyle.gray,   custom_id="t_adduser", row=1)
+    async def add_user(self, i: discord.Interaction, b):
+        if not self._is_staff(i): return await i.response.send_message("❌ Staff only.", ephemeral=True)
+        await i.response.send_modal(ManageUsersModal())
+
+    @discord.ui.button(label="Delete",  emoji="🗑️", style=discord.ButtonStyle.red,     custom_id="t_delete",  row=1)
+    async def delete(self, i: discord.Interaction, b):
+        if not self._is_staff(i): return await i.response.send_message("❌ Staff only.", ephemeral=True)
+        e = discord.Embed(color=C_ERROR, description="🗑️  Deleting ticket in **5 seconds**...", timestamp=datetime.utcnow())
+        e.set_footer(text="Crimson Gen  ·  Tickets")
+        await i.response.send_message(embed=e)
         await asyncio.sleep(5)
-        await interaction.channel.delete()
-
-
-async def generate_transcript(channel: discord.TextChannel) -> discord.File:
-    """Scrape all messages and build an HTML transcript file."""
-    messages = []
-    async for msg in channel.history(limit=2000, oldest_first=True):
-        messages.append(msg)
-
-    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    rows = ""
-    for msg in messages:
-        ts   = msg.created_at.strftime("%H:%M")
-        name = discord.utils.escape_markdown(msg.author.display_name)
-        bot_badge = " <span class='bot'>BOT</span>" if msg.author.bot else ""
-        content = discord.utils.escape_mentions(msg.content or "")
-        # Basic markdown-ish escaping for HTML
-        content = content.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br>")
-        attachments = ""
-        for a in msg.attachments:
-            if any(a.filename.lower().endswith(x) for x in [".png",".jpg",".jpeg",".gif",".webp"]):
-                attachments += f'<br><img src="{a.url}" style="max-width:400px;max-height:300px;border-radius:8px;margin-top:6px;">'
-            else:
-                attachments += f'<br><a href="{a.url}" target="_blank">📎 {a.filename}</a>'
-        embeds = ""
-        for e in msg.embeds:
-            etitle = (e.title or "").replace("&","&amp;").replace("<","&lt;")
-            edesc  = (e.description or "").replace("&","&amp;").replace("<","&lt;").replace("\n","<br>")
-            embeds += f'<div class="embed"><strong>{etitle}</strong><br>{edesc}</div>'
-        rows += f"""
-        <div class="msg">
-            <img class="avatar" src="{msg.author.display_avatar.url}" onerror="this.style.display='none'">
-            <div class="msg-body">
-                <span class="author">{name}{bot_badge}</span>
-                <span class="ts">{ts}</span>
-                <div class="content">{content}{attachments}{embeds}</div>
-            </div>
-        </div>"""
-
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>Transcript — {channel.name}</title>
-<style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ background: #1e1f22; color: #dcddde; font-family: 'Segoe UI', sans-serif; font-size: 14px; }}
-  .header {{ background: #2b2d31; padding: 20px 30px; border-bottom: 2px solid #dc143c; }}
-  .header h1 {{ color: #dc143c; font-size: 20px; }}
-  .header p  {{ color: #96989d; font-size: 12px; margin-top: 4px; }}
-  .messages {{ padding: 20px 30px; }}
-  .msg {{ display: flex; gap: 14px; padding: 6px 0; }}
-  .msg:hover {{ background: #2b2d31; border-radius: 8px; padding: 6px 10px; }}
-  .avatar {{ width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0; margin-top: 2px; }}
-  .msg-body {{ flex: 1; }}
-  .author {{ color: #fff; font-weight: 600; font-size: 14px; }}
-  .bot {{ background: #5865f2; color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 4px; margin-left: 5px; vertical-align: middle; }}
-  .ts {{ color: #72767d; font-size: 11px; margin-left: 8px; }}
-  .content {{ color: #dcddde; margin-top: 2px; line-height: 1.5; word-break: break-word; }}
-  .embed {{ background: #2b2d31; border-left: 4px solid #5865f2; padding: 8px 12px; border-radius: 4px; margin-top: 6px; }}
-  a {{ color: #00aff4; }}
-  .footer {{ text-align: center; padding: 20px; color: #72767d; font-size: 11px; border-top: 1px solid #2b2d31; margin-top: 20px; }}
-</style>
-</head>
-<body>
-<div class="header">
-  <h1>📋 Ticket Transcript — #{channel.name}</h1>
-  <p>Generated: {now_str}  ·  {len(messages)} messages  ·  Crimson Gen</p>
-</div>
-<div class="messages">{rows}</div>
-<div class="footer">Crimson Gen Ticket System  ·  {now_str}</div>
-</body>
-</html>"""
-
-    buf = html.encode("utf-8")
-    import io
-    return discord.File(io.BytesIO(buf), filename=f"transcript-{channel.name}.html")
+        await i.channel.delete()
 
 
 class ClosedTicketView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
+    def __init__(self): super().__init__(timeout=None)
 
-    @discord.ui.button(label="Reopen", emoji="🔓", style=discord.ButtonStyle.green, custom_id="ticket_reopen_btn")
-    async def reopen_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        for member in interaction.channel.members:
-            await interaction.channel.set_permissions(member, send_messages=True, read_messages=True)
-        embed = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
-        embed.description = (
-            f"## 🔓  Ticket Reopened\n"
-            f"> This ticket has been reopened by {interaction.user.mention}.\n"
-            f"> Please continue describing your issue."
-        )
-        embed.set_footer(text="Crimson Gen  ·  Ticket System", icon_url=interaction.guild.me.display_avatar.url)
-        await interaction.channel.send(embed=embed, view=TicketActionsView())
+    def _is_staff(self, i):
+        sr = discord.utils.get(i.guild.roles, name=STAFF_ROLE_NAME)
+        return (sr and sr in i.user.roles) or i.user.guild_permissions.administrator
+
+    @discord.ui.button(label="Reopen",     emoji="🔓", style=discord.ButtonStyle.green,   custom_id="ticket_reopen_btn")
+    async def reopen_ticket(self, i: discord.Interaction, b):
+        if not self._is_staff(i): return await i.response.send_message("❌ Staff only.", ephemeral=True)
+        await i.response.defer()
+        for m in i.channel.members:
+            await i.channel.set_permissions(m, send_messages=True, read_messages=True)
+        e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
+        e.description = f"🔓  Ticket reopened by {i.user.mention}."
+        e.set_footer(text="Crimson Gen  ·  Tickets", icon_url=i.guild.me.display_avatar.url)
+        await i.channel.send(embed=e, view=TicketActionsView())
 
     @discord.ui.button(label="Transcript", emoji="📋", style=discord.ButtonStyle.primary, custom_id="ticket_transcript_btn")
-    async def save_transcript(self, interaction: discord.Interaction, button: discord.ui.Button):
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
-        is_staff_user = (staff_role and staff_role in interaction.user.roles) or interaction.user.guild_permissions.administrator
-        if not is_staff_user:
-            return await interaction.response.send_message("❌ Only staff can save transcripts.", ephemeral=True)
-        await interaction.response.defer(ephemeral=True)
+    async def save_transcript(self, i: discord.Interaction, b):
+        if not self._is_staff(i): return await i.response.send_message("❌ Staff only.", ephemeral=True)
+        await i.response.defer(ephemeral=True)
         try:
-            transcript = await generate_transcript(interaction.channel)
-            # Send to user ephemerally
-            await interaction.followup.send(
-                embed=discord.Embed(
-                    description=f"📋 Transcript for **{interaction.channel.name}** generated!",
-                    color=0x5865F2
-                ),
-                file=transcript,
-                ephemeral=True
-            )
-            # Also save to transcript channel if set
-            ch_id = ticket_transcript_channels.get(interaction.guild.id)
-            if ch_id and (log_ch := interaction.guild.get_channel(ch_id)):
-                transcript2 = await generate_transcript(interaction.channel)
-                e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-                e.description = (
-                    f"## 📋  Ticket Transcript\n"
-                    f"> **Channel:** {interaction.channel.name}\n"
-                    f"> **Saved by:** {interaction.user.mention}\n"
-                    f"> **Closed:** <t:{int(datetime.utcnow().timestamp())}:F>"
-                )
-                ft(e, "Crimson Gen • Tickets", interaction.guild.me.display_avatar.url)
-                await log_ch.send(embed=e, file=transcript2)
+            tf = await generate_transcript(i.channel)
+            e  = discord.Embed(color=C_INFO, description=f"📋  Transcript for `{i.channel.name}` generated.", timestamp=datetime.utcnow())
+            e.set_footer(text="Crimson Gen  ·  Tickets", icon_url=i.guild.me.display_avatar.url)
+            await i.followup.send(embed=e, file=tf, ephemeral=True)
+            ch_id = ticket_transcript_channels.get(i.guild.id)
+            if ch_id and (lch := i.guild.get_channel(ch_id)):
+                tf2  = await generate_transcript(i.channel)
+                le   = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+                le.set_author(name="Ticket Transcript", icon_url=i.guild.me.display_avatar.url)
+                le.add_field(name="📋  Channel",   value=f"`{i.channel.name}`",   inline=True)
+                le.add_field(name="💾  Saved by",  value=i.user.mention,           inline=True)
+                le.add_field(name="📅  Time",      value=f"<t:{int(datetime.utcnow().timestamp())}:F>", inline=False)
+                le.set_footer(text="Crimson Gen  ·  Tickets", icon_url=i.guild.me.display_avatar.url)
+                await lch.send(embed=le, file=tf2)
         except Exception as ex:
-            await interaction.followup.send(f"❌ Failed to generate transcript: `{ex}`", ephemeral=True)
+            await i.followup.send(f"❌ Failed: `{ex}`", ephemeral=True)
 
-    @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.red, custom_id="ticket_delete_btn")
-    async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
-        is_staff_user = (staff_role and staff_role in interaction.user.roles) or interaction.user.guild_permissions.administrator
-        if not is_staff_user:
-            return await interaction.response.send_message("❌ Only staff can delete tickets.", ephemeral=True)
-        await interaction.response.send_message("🗑️ Deleting ticket in 3 seconds...")
+    @discord.ui.button(label="Delete",     emoji="🗑️", style=discord.ButtonStyle.red,     custom_id="ticket_delete_btn")
+    async def delete_ticket(self, i: discord.Interaction, b):
+        if not self._is_staff(i): return await i.response.send_message("❌ Staff only.", ephemeral=True)
+        e = discord.Embed(color=C_ERROR, description="🗑️  Deleting in 3 seconds...", timestamp=datetime.utcnow())
+        e.set_footer(text="Crimson Gen  ·  Tickets")
+        await i.response.send_message(embed=e)
         await asyncio.sleep(3)
-        await interaction.channel.delete()
+        await i.channel.delete()
 
 
 class CloseReasonModal(discord.ui.Modal, title="Close Ticket"):
     reason = discord.ui.TextInput(
-        label="Why do you want to close this ticket?",
+        label="Reason for closing",
         style=discord.TextStyle.paragraph,
-        placeholder="Enter your reason here...",
+        placeholder="Why are you closing this ticket?",
         required=True,
         max_length=500
     )
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
-
         staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
         await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False, read_messages=False)
-        for member in interaction.channel.members:
-            if staff_role and staff_role not in member.roles:
-                await interaction.channel.set_permissions(member, send_messages=False)
+        for m in interaction.channel.members:
+            if staff_role and staff_role not in m.roles and not m.guild_permissions.administrator:
+                await interaction.channel.set_permissions(m, send_messages=False)
 
-        # ── Generate transcript ───────────────────────────────
-        transcript_file  = None
-        transcript_file2 = None
+        ts = int(datetime.utcnow().timestamp())
+
+        # Generate transcript before sending close embed
+        transcript_file = None
         try:
-            transcript_file  = await generate_transcript(interaction.channel)
-            transcript_file2 = await generate_transcript(interaction.channel)
+            transcript_file = await generate_transcript(interaction.channel)
         except Exception:
             pass
 
-        # ── Close embed ───────────────────────────────────────
-        ts  = int(datetime.utcnow().timestamp())
-        embed = discord.Embed(color=0x2b2d31, timestamp=datetime.utcnow())
-        embed.description = (
-            f"## 🔒  Ticket Closed\n"
-            f"> This ticket has been closed. Use the buttons below to reopen, save the transcript, or delete.\n"
-            f"\u200b"
-        )
-        embed.set_author(
-            name=f"Closed by {interaction.user.display_name}",
+        # ── Close embed ────────────────────────────────────────
+        e = discord.Embed(color=0x2b2d31, timestamp=datetime.utcnow())
+        e.set_author(
+            name=f"Ticket Closed  ·  {interaction.channel.name}",
             icon_url=interaction.user.display_avatar.url
         )
-        embed.add_field(name="👤  Closed By",  value=interaction.user.mention,       inline=True)
-        embed.add_field(name="📅  Closed At",  value=f"<t:{ts}:F>",                  inline=True)
-        embed.add_field(name="📝  Reason",     value=f"```{self.reason.value}```",    inline=False)
-        embed.set_footer(text=f"Crimson Gen  ·  Ticket System", icon_url=interaction.guild.me.display_avatar.url)
+        e.description = f"### 🔒  This ticket has been closed\n\u200b"
+        e.add_field(name="👤  Closed By", value=interaction.user.mention,           inline=True)
+        e.add_field(name="📅  Closed At", value=f"<t:{ts}:F>",                      inline=True)
+        e.add_field(name="📝  Reason",    value=f"```{self.reason.value}```",        inline=False)
+        e.set_footer(text="Crimson Gen  ·  Tickets", icon_url=interaction.guild.me.display_avatar.url)
 
         content = staff_role.mention if staff_role else None
         if transcript_file:
-            await interaction.channel.send(content=content, embed=embed, file=transcript_file, view=ClosedTicketView())
+            await interaction.channel.send(content=content, embed=e, file=transcript_file, view=ClosedTicketView())
         else:
-            await interaction.channel.send(content=content, embed=embed, view=ClosedTicketView())
+            await interaction.channel.send(content=content, embed=e, view=ClosedTicketView())
 
-        # ── DM transcript to ticket creator ───────────────────
+        # ── DM transcript to creator ───────────────────────────
         creator_id = ticket_creators.get(interaction.channel.id)
-        if creator_id and transcript_file2:
+        if creator_id:
             try:
                 creator = interaction.guild.get_member(creator_id)
                 if creator:
-                    dm_e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+                    tf_dm = await generate_transcript(interaction.channel)
+                    dm_e  = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+                    dm_e.set_author(name=f"{interaction.guild.name}  ·  Ticket Closed", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
                     dm_e.description = (
-                        f"## 📋  Your Ticket Transcript\n"
-                        f"> **Server:** {interaction.guild.name}\n"
+                        f"### 📋  Your ticket has been closed\n"
                         f"> **Ticket:** `{interaction.channel.name}`\n"
                         f"> **Closed by:** {interaction.user.display_name}\n"
                         f"> **Reason:** {self.reason.value}\n\n"
-                        f"Your ticket transcript is attached below. Open it in any browser to view the full conversation."
+                        f"Your transcript is attached — open it in any browser."
                     )
-                    dm_e.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
-                    ft(dm_e, "Crimson Gen • Tickets")
-                    transcript_file2 = await generate_transcript(interaction.channel)
-                    await creator.send(embed=dm_e, file=transcript_file2)
+                    dm_e.set_footer(text="Crimson Gen  ·  Tickets")
+                    await creator.send(embed=dm_e, file=tf_dm)
             except Exception:
-                pass  # DMs may be closed, silently skip
+                pass
 
-        # ── Auto-send to transcript log channel ───────────────
+        # ── Auto-log to transcript channel ────────────────────
         ch_id = ticket_transcript_channels.get(interaction.guild.id)
-        if ch_id and (log_ch := interaction.guild.get_channel(ch_id)):
+        if ch_id and (lch := interaction.guild.get_channel(ch_id)):
             try:
-                transcript_log = await generate_transcript(interaction.channel)
-                log_e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-                log_e.description = (
-                    f"## 📋  Ticket Transcript\n"
-                    f"> **Channel:** `{interaction.channel.name}`\n"
-                    f"> **Closed by:** {interaction.user.mention}\n"
-                    f"> **Reason:** {self.reason.value}\n"
-                    f"> **Time:** <t:{int(datetime.utcnow().timestamp())}:F>"
-                )
-                ft(log_e, "Crimson Gen • Tickets", interaction.guild.me.display_avatar.url)
-                await log_ch.send(embed=log_e, file=transcript_log)
+                tf_log = await generate_transcript(interaction.channel)
+                le = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+                le.set_author(name="Ticket Transcript", icon_url=interaction.guild.me.display_avatar.url)
+                le.add_field(name="📋  Channel",    value=f"`{interaction.channel.name}`",   inline=True)
+                le.add_field(name="👤  Closed by",  value=interaction.user.mention,           inline=True)
+                le.add_field(name="📝  Reason",     value=self.reason.value,                  inline=False)
+                le.add_field(name="📅  Time",       value=f"<t:{ts}:F>",                      inline=False)
+                le.set_footer(text="Crimson Gen  ·  Tickets", icon_url=interaction.guild.me.display_avatar.url)
+                await lch.send(embed=le, file=tf_log)
             except Exception:
                 pass
 
 
 class RenameTicketModal(discord.ui.Modal, title="Rename Ticket"):
-    new_name = discord.ui.TextInput(
-        label="New ticket name",
-        style=discord.TextStyle.short,
-        placeholder="Enter new name (e.g., payment-issue)",
-        required=True,
-        max_length=50
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        clean_name = self.new_name.value.lower().replace(" ", "-")
-        clean_name = "".join(c for c in clean_name if c.isalnum() or c == "-")
+    name = discord.ui.TextInput(label="New name", placeholder="e.g. payment-issue", max_length=50)
+    async def on_submit(self, i: discord.Interaction):
+        await i.response.defer(ephemeral=True)
+        clean = "".join(c for c in self.name.value.lower().replace(" ", "-") if c.isalnum() or c == "-")
         try:
-            await interaction.channel.edit(name=f"ticket-{clean_name}")
-            await interaction.followup.send(f"✅ Ticket renamed to: `ticket-{clean_name}`", ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Failed to rename ticket: {str(e)}", ephemeral=True)
+            await i.channel.edit(name=f"ticket-{clean}")
+            await i.followup.send(embed=discord.Embed(color=C_SUCCESS, description=f"✅  Renamed to `ticket-{clean}`"), ephemeral=True)
+        except Exception as ex:
+            await i.followup.send(f"❌ Failed: `{ex}`", ephemeral=True)
 
 
-class ManageUsersModal(discord.ui.Modal, title="Manage Ticket Users"):
-    user_input = discord.ui.TextInput(
-        label="Add or Remove User",
-        style=discord.TextStyle.short,
-        placeholder="@username or User ID (prefix with - to remove)",
-        required=True,
-        max_length=100
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        user_text = self.user_input.value.strip()
-        remove_user = user_text.startswith("-")
-        if remove_user:
-            user_text = user_text[1:].strip()
-
-        user = None
-        user_text = user_text.replace("@", "").replace("<", "").replace(">", "").replace("!", "")
-
-        if user_text.isdigit():
-            try: user = await interaction.guild.fetch_member(int(user_text))
+class ManageUsersModal(discord.ui.Modal, title="Add / Remove User"):
+    user_input = discord.ui.TextInput(label="User ID or name (- prefix to remove)", max_length=100)
+    async def on_submit(self, i: discord.Interaction):
+        await i.response.defer(ephemeral=True)
+        raw    = self.user_input.value.strip()
+        remove = raw.startswith("-")
+        raw    = raw.lstrip("-").strip().replace("@","").replace("<","").replace(">","").replace("!","")
+        user   = None
+        if raw.isdigit():
+            try: user = await i.guild.fetch_member(int(raw))
             except: pass
-
+        if not user: user = discord.utils.get(i.guild.members, name=raw)
+        if not user: user = discord.utils.get(i.guild.members, display_name=raw)
         if not user:
-            user = discord.utils.get(interaction.guild.members, name=user_text)
-        if not user:
-            user = discord.utils.get(interaction.guild.members, display_name=user_text)
-
-        if not user:
-            await interaction.followup.send(f"❌ Could not find user: `{self.user_input.value}`\nTry using their User ID or @mention", ephemeral=True)
-            return
-
-        try:
-            if remove_user:
-                await interaction.channel.set_permissions(user, overwrite=None)
-                await interaction.followup.send(f"✅ Removed {user.mention} from this ticket", ephemeral=True)
-            else:
-                await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
-                await interaction.followup.send(f"✅ Added {user.mention} to this ticket", ephemeral=True)
-                await interaction.channel.send(f"👥 {user.mention} has been added to this ticket by {interaction.user.mention}")
-        except Exception as e:
-            await interaction.followup.send(f"❌ Failed to manage user: {str(e)}", ephemeral=True)
+            return await i.followup.send(f"❌ User `{raw}` not found.", ephemeral=True)
+        if remove:
+            await i.channel.set_permissions(user, overwrite=None)
+            await i.followup.send(embed=discord.Embed(color=C_SUCCESS, description=f"✅  Removed {user.mention}"), ephemeral=True)
+        else:
+            await i.channel.set_permissions(user, read_messages=True, send_messages=True)
+            await i.followup.send(embed=discord.Embed(color=C_SUCCESS, description=f"✅  Added {user.mention}"), ephemeral=True)
+            await i.channel.send(embed=discord.Embed(color=C_INFO, description=f"👥  {user.mention} was added by {i.user.mention}."))
 
 
-class RemoveUserModal(discord.ui.Modal, title="Remove User from Ticket"):
-    user_input = discord.ui.TextInput(
-        label="User to Remove",
-        style=discord.TextStyle.short,
-        placeholder="@username or User ID",
-        required=True,
-        max_length=100
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        user_text = self.user_input.value.strip()
+class RemoveUserModal(discord.ui.Modal, title="Remove User"):
+    user_input = discord.ui.TextInput(label="User ID or name", max_length=100)
+    async def on_submit(self, i: discord.Interaction):
+        await i.response.defer(ephemeral=True)
+        raw  = self.user_input.value.strip().replace("@","").replace("<","").replace(">","").replace("!","")
         user = None
-        user_text = user_text.replace("@", "").replace("<", "").replace(">", "").replace("!", "")
-
-        if user_text.isdigit():
-            try: user = await interaction.guild.fetch_member(int(user_text))
+        if raw.isdigit():
+            try: user = await i.guild.fetch_member(int(raw))
             except: pass
-
-        if not user:
-            user = discord.utils.get(interaction.guild.members, name=user_text)
-        if not user:
-            user = discord.utils.get(interaction.guild.members, display_name=user_text)
-
-        if not user:
-            await interaction.followup.send(f"❌ Could not find user: `{self.user_input.value}`", ephemeral=True)
-            return
-
-        try:
-            await interaction.channel.set_permissions(user, overwrite=None)
-            await interaction.followup.send(f"✅ Removed {user.mention} from this ticket", ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Failed to remove user: {str(e)}", ephemeral=True)
+        if not user: user = discord.utils.get(i.guild.members, name=raw)
+        if not user: user = discord.utils.get(i.guild.members, display_name=raw)
+        if not user: return await i.followup.send(f"❌ User not found.", ephemeral=True)
+        await i.channel.set_permissions(user, overwrite=None)
+        await i.followup.send(embed=discord.Embed(color=C_SUCCESS, description=f"✅  Removed {user.mention}"), ephemeral=True)
 
 
-# ── Ticket Commands ──
+# ── Ticket Commands ──────────────────────────────────────
 @bot.tree.command(name="panel", description="Send the support ticket panel")
 @app_commands.checks.has_permissions(administrator=True)
 async def panel(interaction: discord.Interaction):
     e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-    e.description = (
-        f"## 🎟️  Support Tickets\n"
-        f"> Need help or have a question? Open a private ticket below and our staff team will assist you as soon as possible.\n"
-        f"\u200b"
-    )
     e.set_author(
         name=f"{interaction.guild.name}  ·  Support",
         icon_url=interaction.guild.icon.url if interaction.guild.icon else None
     )
-    e.add_field(name="⚡  Response Time",  value="As fast as possible",     inline=True)
-    e.add_field(name="🔒  Privacy",        value="100% private channel",     inline=True)
-    e.add_field(name="📂  Categories",     value="5 support categories",     inline=True)
-    e.add_field(
-        name="\u200b",
-        value=(
-            "❓ General Support\n"
-            "🚨 Report User\n"
-            "🤝 Partnership\n"
-            "🐛 Bug Report\n"
-            "📝 Other"
-        ),
-        inline=False
+    e.description = (
+        "### 🎟️  Support Tickets\n"
+        "> Need help? Select a category below and a **private ticket** will be created just for you.\n"
+        "> Our staff team will assist you as soon as possible.\n\u200b"
     )
+    e.add_field(name="⚡  Response",   value="Fast as possible",     inline=True)
+    e.add_field(name="🔒  Private",    value="Just you & staff",      inline=True)
+    e.add_field(name="📂  Categories", value="5 to choose from",      inline=True)
     e.set_image(url=TICKET_BANNER)
     e.set_footer(text=f"Crimson Gen  ·  {interaction.guild.name}", icon_url=interaction.guild.me.display_avatar.url)
     await interaction.channel.send(embed=e, view=TicketPanelView())
-    await interaction.response.send_message("✅ Ticket panel sent.", ephemeral=True)
+    await interaction.response.send_message(
+        embed=discord.Embed(color=C_SUCCESS, description="✅  Panel sent."),
+        ephemeral=True
+    )
 
-@bot.tree.command(name="close", description="Close this ticket")
+@bot.tree.command(name="close", description="Close the current ticket")
 async def close(interaction: discord.Interaction):
     if not interaction.channel.name.startswith("ticket-"):
-        await interaction.response.send_message("❌ This command can only be used in ticket channels!", ephemeral=True)
-        return
+        return await interaction.response.send_message("❌ Run this inside a ticket channel.", ephemeral=True)
     await interaction.response.send_modal(CloseReasonModal())
 
-@bot.tree.command(name="deleteticket", description="Forcefully delete a ticket channel")
+@bot.tree.command(name="deleteticket", description="Force-delete a ticket channel")
 @app_commands.checks.has_permissions(manage_channels=True)
 async def deleteticket(interaction: discord.Interaction):
     if not interaction.channel.name.startswith("ticket-"):
-        await interaction.response.send_message("❌ This command can only be used in ticket channels!", ephemeral=True)
-        return
-    await interaction.response.send_message("🗑️ **Force deleting this ticket in 3 seconds...**\nThis action cannot be undone!")
+        return await interaction.response.send_message("❌ Run this inside a ticket channel.", ephemeral=True)
+    e = discord.Embed(color=C_ERROR, description="🗑️  Force deleting in **3 seconds**...", timestamp=datetime.utcnow())
+    await interaction.response.send_message(embed=e)
     await asyncio.sleep(3)
     try:
-        await interaction.channel.delete(reason=f"Ticket forcefully deleted by {interaction.user}")
-    except discord.Forbidden:
-        await interaction.followup.send("❌ I don't have permission to delete this channel!", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"❌ Failed to delete ticket: {str(e)}", ephemeral=True)
+        await interaction.channel.delete(reason=f"Force deleted by {interaction.user}")
+    except Exception as ex:
+        pass
 
-@bot.tree.command(name="ticket_transcriptchannel", description="Set or clear the channel where ticket transcripts are saved")
+@bot.tree.command(name="ticket_transcriptchannel", description="Set the channel where ticket transcripts are saved")
 @app_commands.checks.has_permissions(administrator=True)
 @app_commands.describe(channel="Channel to save transcripts to (leave empty to clear)")
 async def ticket_transcriptchannel(interaction: discord.Interaction, channel: discord.TextChannel = None):
     if channel:
         ticket_transcript_channels[interaction.guild.id] = channel.id
         e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
-        e.description = (
-            f"## ✅  Transcript Channel Set\n"
-            f"> Ticket transcripts will automatically be sent to {channel.mention} whenever a ticket is closed.\n"
-            f"> Staff can also manually save transcripts using the 📋 **Transcript** button on closed tickets."
-        )
+        e.description = f"✅  Transcripts will be auto-saved to {channel.mention} when tickets close."
     else:
         ticket_transcript_channels.pop(interaction.guild.id, None)
         e = discord.Embed(color=C_WARNING, timestamp=datetime.utcnow())
-        e.description = (
-            f"## ✅  Transcript Channel Cleared\n"
-            f"> Transcripts will no longer be auto-saved.\n"
-            f"> Staff can still generate them manually using the 📋 **Transcript** button."
-        )
-    ft(e, "Crimson Gen • Tickets", interaction.guild.me.display_avatar.url)
+        e.description = "✅  Transcript channel cleared. Staff can still save manually via the 📋 button."
+    e.set_footer(text="Crimson Gen  ·  Tickets", icon_url=interaction.guild.me.display_avatar.url)
     await interaction.response.send_message(embed=e, ephemeral=True)
 
-@bot.tree.command(name="ticket_transcript", description="Manually generate a transcript for the current ticket")
+@bot.tree.command(name="ticket_transcript", description="Manually generate a transcript for this ticket")
 @app_commands.checks.has_permissions(manage_channels=True)
-async def ticket_transcript(interaction: discord.Interaction):
+async def ticket_transcript_cmd(interaction: discord.Interaction):
     if not interaction.channel.name.startswith("ticket-"):
-        return await interaction.response.send_message("❌ This command can only be used in ticket channels!", ephemeral=True)
+        return await interaction.response.send_message("❌ Run this inside a ticket channel.", ephemeral=True)
     await interaction.response.defer(ephemeral=True)
     try:
-        transcript = await generate_transcript(interaction.channel)
-        e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-        e.description = f"## 📋  Transcript Generated\n> **Channel:** `{interaction.channel.name}`"
-        ft(e, "Crimson Gen • Tickets", interaction.guild.me.display_avatar.url)
-        await interaction.followup.send(embed=e, file=transcript, ephemeral=True)
-
-        # Also post to transcript log channel if set
+        tf = await generate_transcript(interaction.channel)
+        e  = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+        e.set_author(name="Ticket Transcript", icon_url=interaction.guild.me.display_avatar.url)
+        e.description = f"📋  Transcript for `{interaction.channel.name}` generated."
+        e.set_footer(text="Crimson Gen  ·  Tickets", icon_url=interaction.guild.me.display_avatar.url)
+        await interaction.followup.send(embed=e, file=tf, ephemeral=True)
         ch_id = ticket_transcript_channels.get(interaction.guild.id)
-        if ch_id and (log_ch := interaction.guild.get_channel(ch_id)):
-            transcript2 = await generate_transcript(interaction.channel)
-            log_e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-            log_e.description = (
-                f"## 📋  Ticket Transcript\n"
-                f"> **Channel:** `{interaction.channel.name}`\n"
-                f"> **Generated by:** {interaction.user.mention}\n"
-                f"> **Time:** <t:{int(datetime.utcnow().timestamp())}:F>"
-            )
-            ft(log_e, "Crimson Gen • Tickets", interaction.guild.me.display_avatar.url)
-            await log_ch.send(embed=log_e, file=transcript2)
+        if ch_id and (lch := interaction.guild.get_channel(ch_id)):
+            tf2 = await generate_transcript(interaction.channel)
+            le  = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+            le.set_author(name="Ticket Transcript", icon_url=interaction.guild.me.display_avatar.url)
+            le.add_field(name="📋  Channel",    value=f"`{interaction.channel.name}`",   inline=True)
+            le.add_field(name="💾  By",         value=interaction.user.mention,           inline=True)
+            le.add_field(name="📅  Time",       value=f"<t:{int(datetime.utcnow().timestamp())}:F>", inline=False)
+            le.set_footer(text="Crimson Gen  ·  Tickets", icon_url=interaction.guild.me.display_avatar.url)
+            await lch.send(embed=le, file=tf2)
     except Exception as ex:
-        await interaction.followup.send(f"❌ Failed to generate transcript: `{ex}`", ephemeral=True)
+        await interaction.followup.send(f"❌ Failed: `{ex}`", ephemeral=True)
 
 # ══════════════════════════════════════════════════════════
 #  MODERATION
@@ -1575,36 +1378,31 @@ async def announce(
     message: str,
     ping: discord.Role = None
 ):
-    now = int(datetime.utcnow().timestamp())
+    ts = int(datetime.utcnow().timestamp())
 
     e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-
-    # Clean bold title at top, then message body
-    e.description = f"**{title}**\n\n{message}"
-
-    # Server name + icon as author — looks clean and official
     e.set_author(
-        name=f"📢  {interaction.guild.name}",
+        name=interaction.guild.name,
         icon_url=interaction.guild.icon.url if interaction.guild.icon else bot.user.display_avatar.url
     )
-
-    # Separator line then meta info
-    e.add_field(name="\u200b", value=f"━━━━━━━━━━━━━━━━━━━━", inline=False)
-    e.add_field(name="🕐  Posted",    value=f"<t:{now}:F>",           inline=True)
-    e.add_field(name="✍️  By",        value=interaction.user.mention,  inline=True)
-
+    e.title       = f"📢  {title}"
+    e.description = f"{message}"
+    e.add_field(name="\u200b", value=f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", inline=False)
+    e.add_field(name="🕐  Posted",   value=f"<t:{ts}:F>",          inline=True)
+    e.add_field(name="✍️  By",       value=interaction.user.mention, inline=True)
+    if ping:
+        e.add_field(name="🔔  Ping", value=ping.mention,             inline=True)
     e.set_footer(
         text=f"{interaction.guild.name}",
         icon_url=interaction.guild.icon.url if interaction.guild.icon else bot.user.display_avatar.url
     )
 
-    # Ping role content above embed if set
     content = ping.mention if ping else None
     await channel.send(content=content, embed=e)
-
-    conf = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
-    conf.description = f"✅  Announcement posted in {channel.mention}"
-    await interaction.response.send_message(embed=conf, ephemeral=True)
+    await interaction.response.send_message(
+        embed=discord.Embed(color=C_SUCCESS, description=f"✅  Posted in {channel.mention}"),
+        ephemeral=True
+    )
 
 @bot.tree.command(name="invite", description="Get the bot invite link")
 async def invite(interaction: discord.Interaction):
@@ -2150,12 +1948,7 @@ def _build_automod_embed(guild: discord.Guild, cfg: dict) -> discord.Embed:
     return e
 
 
-@bot.tree.command(name="automod", description="View and manage the AutoMod dashboard")
-@app_commands.checks.has_permissions(administrator=True)
-async def automod_cmd(interaction: discord.Interaction):
-    cfg = get_automod(interaction.guild.id)
-    e   = _build_automod_embed(interaction.guild, cfg)
-    await interaction.response.send_message(embed=e, ephemeral=True)
+
 
 
 @bot.tree.command(name="automod_toggle", description="Enable or disable AutoMod entirely")
