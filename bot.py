@@ -346,7 +346,7 @@ async def on_ready():
     bot.add_view(TicketActionsView())
     bot.add_view(ClosedTicketView())
     bot.add_view(StaffTicketInfoView())
-    bot.add_view(MemeView())
+
     try:
         synced = await bot.tree.sync()
         print(f"✅  Synced {len(synced)} commands as {bot.user}")
