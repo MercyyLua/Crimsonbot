@@ -640,51 +640,55 @@ class TicketCategorySelect(discord.ui.Select):
         if staff_role:
             await channel.set_permissions(staff_role, read_messages=True, send_messages=True)
 
-        welcome_text = f"👋 {interaction.user.mention}, welcome to your ticket!"
+        welcome_text = f"{interaction.user.mention}"
 
-        embed = discord.Embed(
-            title=f"🎟️ Support Ticket #{str(ticket_counter).zfill(4)}",
-            description=(
-                f"**Status:** 🟢 Open\n"
-                f"**Category:** {selected_category}\n"
-                f"**Created:** <t:{int(datetime.utcnow().timestamp())}:F>\n"
-                f"**Ticket ID:** `{str(ticket_counter).zfill(4)}`\n\n"
-                f"👤 **Creator Information**\n"
-                f"• User: {interaction.user.mention}\n"
-                f"• ID: `{interaction.user.id}`\n"
-                f"• Joined: <t:{int(interaction.user.joined_at.timestamp())}:R>\n\n"
-                f"🛡️ **Quick Actions**\n"
-                f"• 🔍 View - Show ticket details\n"
-                f"• ✏️ Rename - Change ticket name\n"
-                f"• 👥 Users - Manage access\n"
-                f"• ⭐ Claim - Handle ticket\n"
-                f"• 🔒 Close - Close ticket\n"
-                f"• 🗑️ Delete - Remove ticket\n\n"
-                f"ℹ️ **Please describe your issue below and staff will assist you shortly.**"
-            ),
-            color=discord.Color.blue(),
-            timestamp=datetime.utcnow()
+        cat_emojis = {
+            "General Support": "❓", "Report User": "🚨",
+            "Partnership": "🤝", "Bug Report": "🐛", "Other": "📝"
+        }
+        cat_emoji = cat_emojis.get(selected_category, "🎟️")
+        num = str(ticket_counter).zfill(4)
+        ts  = int(datetime.utcnow().timestamp())
+
+        embed = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+        embed.description = (
+            f"## {cat_emoji}  {selected_category}\n"
+            f"> Welcome {interaction.user.mention}! A member of staff will be with you shortly.\n"
+            f"> Please describe your issue in as much detail as possible.\n\u200b"
         )
-        embed.set_footer(text=f"Created by {interaction.user.name}", icon_url=interaction.user.display_avatar.url)
+        embed.set_author(
+            name=f"Ticket #{num}  ·  {interaction.guild.name}",
+            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+        )
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        embed.add_field(name="👤  User",      value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=True)
+        embed.add_field(name="📂  Category",  value=f"{cat_emoji} {selected_category}",                     inline=True)
+        embed.add_field(name="🟢  Status",    value="Open",                                                   inline=True)
+        embed.add_field(name="📅  Opened",    value=f"<t:{ts}:F>",                                           inline=True)
+        embed.add_field(name="🗓️  Joined",    value=f"<t:{int(interaction.user.joined_at.timestamp())}:R>",  inline=True)
+        embed.add_field(name="🎟️  Ticket",    value=f"`#{num}`",                                             inline=True)
         embed.set_image(url=TICKET_BANNER)
+        embed.set_footer(text=f"Crimson Gen  ·  Ticket #{num}", icon_url=interaction.guild.me.display_avatar.url)
 
         await channel.send(content=welcome_text, embed=embed, view=TicketActionsView())
 
-        info_embed = discord.Embed(title="ℹ️ Ticket Information", color=discord.Color.blue())
-        info_embed.add_field(name="Creator",  value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=True)
-        info_embed.add_field(name="Category", value=selected_category,                                       inline=True)
-        info_embed.add_field(name="Ticket #", value=f"#{str(ticket_counter).zfill(4)}",                      inline=True)
-        info_embed.add_field(name="Channel Age", value="0d 0h 0m",                                           inline=True)
-        info_embed.add_field(name="Status",   value="🟢 Open",                                               inline=True)
-        info_embed.add_field(name="\u200b",  value="\u200b",                                               inline=True)
-
-        time_str = datetime.utcnow().strftime("%H:%M")
-        info_embed.set_footer(
-            text=f"Created by {interaction.user.name} | vandaag om {time_str}",
-            icon_url=interaction.user.display_avatar.url
-        )
-
         if staff_role:
+            info_embed = discord.Embed(color=0x2b2d31, timestamp=datetime.utcnow())
+            info_embed.description = (
+                f"## 📋  Staff Info — Ticket #{num}\n"
+                f"> New ticket opened and awaiting staff response."
+            )
+            info_embed.set_thumbnail(url=interaction.user.display_avatar.url)
+            info_embed.add_field(name="👤  Creator",   value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=True)
+            info_embed.add_field(name="📂  Category",  value=f"{cat_emoji} {selected_category}",                     inline=True)
+            info_embed.add_field(name="🎟️  Ticket #",  value=f"`#{num}`",                                            inline=True)
+            info_embed.add_field(name="📅  Opened",    value=f"<t:{ts}:R>",                                          inline=True)
+            info_embed.add_field(name="🟢  Status",    value="Open",                                                  inline=True)
+            info_embed.add_field(name="\u200b",        value="\u200b",                                               inline=True)
+            info_embed.set_footer(
+                text=f"Crimson Gen  ·  Ticket #{num}",
+                icon_url=interaction.guild.me.display_avatar.url
+            )
             await channel.send(embed=info_embed, view=StaffTicketInfoView())
 
         ticket_creators[channel.id] = interaction.user.id
@@ -865,12 +869,13 @@ class ClosedTicketView(discord.ui.View):
         await interaction.response.defer()
         for member in interaction.channel.members:
             await interaction.channel.set_permissions(member, send_messages=True, read_messages=True)
-        embed = discord.Embed(
-            title="🔓 Ticket Reopened",
-            description=f"This ticket has been reopened by {interaction.user.mention}",
-            color=discord.Color.green(),
-            timestamp=datetime.utcnow()
+        embed = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
+        embed.description = (
+            f"## 🔓  Ticket Reopened\n"
+            f"> This ticket has been reopened by {interaction.user.mention}.\n"
+            f"> Please continue describing your issue."
         )
+        embed.set_footer(text="Crimson Gen  ·  Ticket System", icon_url=interaction.guild.me.display_avatar.url)
         await interaction.channel.send(embed=embed, view=TicketActionsView())
 
     @discord.ui.button(label="Transcript", emoji="📋", style=discord.ButtonStyle.primary, custom_id="ticket_transcript_btn")
@@ -946,14 +951,21 @@ class CloseReasonModal(discord.ui.Modal, title="Close Ticket"):
             pass
 
         # ── Close embed ───────────────────────────────────────
-        embed = discord.Embed(color=discord.Color.red(), timestamp=datetime.utcnow())
+        ts  = int(datetime.utcnow().timestamp())
+        embed = discord.Embed(color=0x2b2d31, timestamp=datetime.utcnow())
         embed.description = (
             f"## 🔒  Ticket Closed\n"
-            f"> Closed by {interaction.user.mention}\n"
-            f"> <t:{int(datetime.utcnow().timestamp())}:F>"
+            f"> This ticket has been closed. Use the buttons below to reopen, save the transcript, or delete.\n"
+            f"\u200b"
         )
-        embed.add_field(name="📝  Reason", value=f"```{self.reason.value}```", inline=False)
-        embed.set_footer(text="Use the buttons below to reopen, view transcript, or delete.")
+        embed.set_author(
+            name=f"Closed by {interaction.user.display_name}",
+            icon_url=interaction.user.display_avatar.url
+        )
+        embed.add_field(name="👤  Closed By",  value=interaction.user.mention,       inline=True)
+        embed.add_field(name="📅  Closed At",  value=f"<t:{ts}:F>",                  inline=True)
+        embed.add_field(name="📝  Reason",     value=f"```{self.reason.value}```",    inline=False)
+        embed.set_footer(text=f"Crimson Gen  ·  Ticket System", icon_url=interaction.guild.me.display_avatar.url)
 
         content = staff_role.mention if staff_role else None
         if transcript_file:
@@ -1105,24 +1117,33 @@ class RemoveUserModal(discord.ui.Modal, title="Remove User from Ticket"):
 @bot.tree.command(name="panel", description="Send the support ticket panel")
 @app_commands.checks.has_permissions(administrator=True)
 async def panel(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🎟️ Support Tickets",
-        description="**Need help?** Select a category below!",
-        color=discord.Color.blue()
+    e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+    e.description = (
+        f"## 🎟️  Support Tickets\n"
+        f"> Need help or have a question? Open a private ticket below and our staff team will assist you as soon as possible.\n"
+        f"\u200b"
     )
-    embed.add_field(
-        name="",
+    e.set_author(
+        name=f"{interaction.guild.name}  ·  Support",
+        icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+    )
+    e.add_field(name="⚡  Response Time",  value="As fast as possible",     inline=True)
+    e.add_field(name="🔒  Privacy",        value="100% private channel",     inline=True)
+    e.add_field(name="📂  Categories",     value="5 support categories",     inline=True)
+    e.add_field(
+        name="\u200b",
         value=(
-            "✅ Fast response time\n"
-            "✅ Professional support\n"
-            "✅ Private conversation\n"
-            "✅ Multiple categories"
+            "❓ General Support\n"
+            "🚨 Report User\n"
+            "🤝 Partnership\n"
+            "🐛 Bug Report\n"
+            "📝 Other"
         ),
         inline=False
     )
-    embed.set_image(url=TICKET_BANNER)
-    embed.set_footer(text=f"{interaction.guild.name} Support Team", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
-    await interaction.channel.send(embed=embed, view=TicketPanelView())
+    e.set_image(url=TICKET_BANNER)
+    e.set_footer(text=f"Crimson Gen  ·  {interaction.guild.name}", icon_url=interaction.guild.me.display_avatar.url)
+    await interaction.channel.send(embed=e, view=TicketPanelView())
     await interaction.response.send_message("✅ Ticket panel sent.", ephemeral=True)
 
 @bot.tree.command(name="close", description="Close this ticket")
@@ -1555,21 +1576,32 @@ async def announce(
     ping: discord.Role = None
 ):
     now = int(datetime.utcnow().timestamp())
-    e   = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-    e.description = f"## 📢  {title}\n\n{message}"
+
+    e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
     e.set_author(
         name=interaction.guild.name,
         icon_url=interaction.guild.icon.url if interaction.guild.icon else None
     )
-    e.add_field(name="📅  Posted", value=f"<t:{now}:F>",                  inline=True)
-    e.add_field(name="📣  By",     value=interaction.user.mention,          inline=True)
-    e.set_footer(
-        text=f"Announcement  ·  {interaction.guild.name}",
-        icon_url=bot.user.display_avatar.url
+    e.description = (
+        f"## 📢  {title}\n\n"
+        f"{message}\n"
+        f"\u200b"
     )
-    content = ping.mention if ping else None
+    e.add_field(name="📅  Date",        value=f"<t:{now}:F>",              inline=True)
+    e.add_field(name="📣  Posted by",   value=interaction.user.mention,     inline=True)
+    if ping:
+        e.add_field(name="🔔  Ping",    value=ping.mention,                 inline=True)
+    e.set_footer(
+        text=f"{interaction.guild.name}  ·  Announcement",
+        icon_url=interaction.guild.me.display_avatar.url
+    )
+    if interaction.guild.icon:
+        e.set_thumbnail(url=interaction.guild.icon.url)
+
+    content = f"# 📢  New Announcement\n{ping.mention}" if ping else "# 📢  New Announcement"
     await channel.send(content=content, embed=e)
-    conf = _base("", color=C_SUCCESS)
+
+    conf = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
     conf.description = f"✅  Announcement posted in {channel.mention}"
     await interaction.response.send_message(embed=conf, ephemeral=True)
 
