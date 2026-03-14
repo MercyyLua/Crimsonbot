@@ -1578,27 +1578,28 @@ async def announce(
     now = int(datetime.utcnow().timestamp())
 
     e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-    e.set_author(
-        name=interaction.guild.name,
-        icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-    )
-    e.description = (
-        f"## 📢  {title}\n\n"
-        f"{message}\n"
-        f"\u200b"
-    )
-    e.add_field(name="📅  Date",        value=f"<t:{now}:F>",              inline=True)
-    e.add_field(name="📣  Posted by",   value=interaction.user.mention,     inline=True)
-    if ping:
-        e.add_field(name="🔔  Ping",    value=ping.mention,                 inline=True)
-    e.set_footer(
-        text=f"{interaction.guild.name}  ·  Announcement",
-        icon_url=interaction.guild.me.display_avatar.url
-    )
-    if interaction.guild.icon:
-        e.set_thumbnail(url=interaction.guild.icon.url)
 
-    content = f"# 📢  New Announcement\n{ping.mention}" if ping else "# 📢  New Announcement"
+    # Clean bold title at top, then message body
+    e.description = f"**{title}**\n\n{message}"
+
+    # Server name + icon as author — looks clean and official
+    e.set_author(
+        name=f"📢  {interaction.guild.name}",
+        icon_url=interaction.guild.icon.url if interaction.guild.icon else bot.user.display_avatar.url
+    )
+
+    # Separator line then meta info
+    e.add_field(name="\u200b", value=f"━━━━━━━━━━━━━━━━━━━━", inline=False)
+    e.add_field(name="🕐  Posted",    value=f"<t:{now}:F>",           inline=True)
+    e.add_field(name="✍️  By",        value=interaction.user.mention,  inline=True)
+
+    e.set_footer(
+        text=f"{interaction.guild.name}",
+        icon_url=interaction.guild.icon.url if interaction.guild.icon else bot.user.display_avatar.url
+    )
+
+    # Ping role content above embed if set
+    content = ping.mention if ping else None
     await channel.send(content=content, embed=e)
 
     conf = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
