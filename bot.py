@@ -1261,12 +1261,15 @@ async def delwarn(interaction: discord.Interaction, user: discord.Member, warnin
 # ══════════════════════════════════════════════════════════
 @bot.tree.command(name="ping", description="Check the bot's latency")
 async def ping(interaction: discord.Interaction):
-    ms = round(bot.latency * 1000)
-    bar = "🟢" if ms < 100 else "🟡" if ms < 200 else "🔴"
-    e = _base("🏓  Pong!", color=C_SUCCESS if ms < 100 else C_WARNING if ms < 200 else C_ERROR)
-    e.add_field(name="📡 Latency",   value=f"{bar} **{ms}ms**",   inline=True)
-    e.add_field(name="🌐 WebSocket", value=f"`{ms}ms`",            inline=True)
-    ft(e, "Crimson Gen")
+    ms  = round(bot.latency * 1000)
+    dot = "🟢" if ms < 100 else "🟡" if ms < 200 else "🔴"
+    col = C_SUCCESS if ms < 100 else C_WARNING if ms < 200 else C_ERROR
+    quality = "Excellent" if ms < 100 else "Good" if ms < 150 else "Moderate" if ms < 200 else "Poor"
+    e = _base("", color=col)
+    e.description = f"## 🏓 Pong!\n{dot} **{ms}ms** — {quality}"
+    e.add_field(name="WebSocket",  value=f"`{ms}ms`",           inline=True)
+    e.add_field(name="Status",     value=dot + " Online",        inline=True)
+    ft(e, "Crimson Gen", bot.user.display_avatar.url)
     await interaction.response.send_message(embed=e)
 
 @bot.tree.command(name="botinfo", description="View bot information and statistics")
@@ -1277,59 +1280,65 @@ async def botinfo(interaction: discord.Interaction):
         d, r = divmod(int(delta.total_seconds()), 86400)
         h, r = divmod(r, 3600); m, s = divmod(r, 60)
         uptime = f"{d}d {h}h {m}m {s}s"
-    else: uptime = "Unknown"
+    else:
+        uptime = "Unknown"
     try:
         import psutil
-        mem = f"`{psutil.Process(os.getpid()).memory_info().rss/1024/1024:.1f} MB`"
-    except Exception: mem = "`N/A`"
+        mem = f"{psutil.Process(os.getpid()).memory_info().rss/1024/1024:.1f} MB"
+    except Exception:
+        mem = "N/A"
     total_warns = sum(len(v) for v in warnings_db.values())
-    e = _base(f"📊  {bot.user.name}", "Live bot statistics", C_CRIMSON)
+    ms = round(bot.latency * 1000)
+    e = _base("", color=C_CRIMSON)
+    e.description = f"## {bot.user.name}\n> Multipurpose Discord bot built for **Crimson Gen**"
     e.set_thumbnail(url=bot.user.display_avatar.url)
-    e.add_field(name="⏰ Uptime",      value=f"`{uptime}`",                                             inline=True)
-    e.add_field(name="📡 Latency",     value=f"`{round(bot.latency*1000)}ms`",                          inline=True)
-    e.add_field(name="💾 Memory",      value=mem,                                                        inline=True)
-    e.add_field(name="🏠 Servers",     value=f"`{len(bot.guilds)}`",                                    inline=True)
-    e.add_field(name="👥 Users",       value=f"`{sum(g.member_count for g in bot.guilds):,}`",          inline=True)
-    e.add_field(name="📝 Commands",    value=f"`{len(bot.tree.get_commands())}`",                        inline=True)
-    e.add_field(name="🎟️ Tickets",     value=f"`{ticket_counter}`",                                     inline=True)
-    e.add_field(name="💤 AFK",         value=f"`{len(afk_users)}`",                                     inline=True)
-    e.add_field(name="⚠️ Warnings",    value=f"`{total_warns}`",                                        inline=True)
-    e.add_field(name="🐍 Python",      value=f"`{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}`", inline=True)
-    e.add_field(name="📦 discord.py",  value=f"`{discord.__version__}`",                                inline=True)
-    e.add_field(name="🆔 Bot ID",      value=f"`{bot.user.id}`",                                        inline=True)
+    e.add_field(name="⏰  Uptime",      value=f"```{uptime}```",                                              inline=True)
+    e.add_field(name="📡  Latency",     value=f"```{ms}ms```",                                                inline=True)
+    e.add_field(name="💾  Memory",      value=f"```{mem}```",                                                 inline=True)
+    e.add_field(name="🏠  Servers",     value=f"```{len(bot.guilds)}```",                                     inline=True)
+    e.add_field(name="👥  Users",       value=f"```{sum(g.member_count for g in bot.guilds):,}```",           inline=True)
+    e.add_field(name="📝  Commands",    value=f"```{len(bot.tree.get_commands())}```",                        inline=True)
+    e.add_field(name="🎟️  Tickets",     value=f"```{ticket_counter}```",                                     inline=True)
+    e.add_field(name="💤  AFK Users",   value=f"```{len(afk_users)}```",                                     inline=True)
+    e.add_field(name="⚠️  Warnings",    value=f"```{total_warns}```",                                        inline=True)
+    e.add_field(name="🐍  Python",      value=f"```{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}```", inline=True)
+    e.add_field(name="📦  discord.py",  value=f"```{discord.__version__}```",                                inline=True)
+    e.add_field(name="🆔  Bot ID",      value=f"```{bot.user.id}```",                                        inline=True)
     ft(e, f"Requested by {interaction.user.name}", interaction.user.display_avatar.url)
     await interaction.followup.send(embed=e)
 
 @bot.tree.command(name="serverinfo", description="View detailed server information")
 async def serverinfo(interaction: discord.Interaction):
-    g = interaction.guild
+    g      = interaction.guild
     humans = sum(1 for m in g.members if not m.bot)
     bots   = sum(1 for m in g.members if m.bot)
     stats  = get_stats(g.id)
     age    = (datetime.utcnow() - g.created_at.replace(tzinfo=None)).days
     feat_map = {
-        "COMMUNITY":"Community","VERIFIED":"✅ Verified","PARTNERED":"🤝 Partnered",
-        "DISCOVERABLE":"🔍 Discoverable","VANITY_URL":"🔗 Vanity URL",
-        "ANIMATED_ICON":"🎞️ Animated Icon","BANNER":"🖼️ Banner","NEWS":"📰 News Channels"
+        "COMMUNITY": "🌐 Community", "VERIFIED": "✅ Verified", "PARTNERED": "🤝 Partnered",
+        "DISCOVERABLE": "🔍 Discoverable", "VANITY_URL": "🔗 Vanity URL",
+        "ANIMATED_ICON": "🎞️ Animated Icon", "BANNER": "🖼️ Banner", "NEWS": "📰 News Channels"
     }
-    features = [feat_map[f] for f in g.features if f in feat_map] or ["None"]
-    tier_colors = {0: 0x99AAB5, 1: C_BOOST, 2: C_BOOST, 3: 0xFFD700}
-    e = discord.Embed(title=f"🏠  {g.name}", description=g.description or "No description set.",
-                      color=tier_colors.get(g.premium_tier, C_CRIMSON), timestamp=datetime.utcnow())
-    if g.icon: e.set_thumbnail(url=g.icon.url)
+    features   = [feat_map[f] for f in g.features if f in feat_map] or ["None"]
+    tier_cols  = {0: 0x99AAB5, 1: C_BOOST, 2: C_BOOST, 3: 0xFFD700}
+    boost_bars = "▰" * g.premium_subscription_count + "▱" * max(0, 14 - g.premium_subscription_count)
+    e = discord.Embed(color=tier_cols.get(g.premium_tier, C_CRIMSON), timestamp=datetime.utcnow())
+    e.description = f"## 🏠  {g.name}\n{g.description or '*No description set.*'}"
+    if g.icon:   e.set_thumbnail(url=g.icon.url)
     if g.banner: e.set_image(url=g.banner.url)
-    e.add_field(name="👑 Owner",       value=g.owner.mention if g.owner else "?",              inline=True)
-    e.add_field(name="📅 Created",     value=f"<t:{int(g.created_at.timestamp())}:R>",         inline=True)
-    e.add_field(name="🆔 ID",          value=f"`{g.id}`",                                      inline=True)
-    e.add_field(name="👥 Members",     value=f"**{g.member_count}** ({humans} humans, {bots} bots)", inline=True)
-    e.add_field(name="💬 Channels",    value=f"**{len(g.channels)}**",                         inline=True)
-    e.add_field(name="🎭 Roles",       value=f"**{len(g.roles)}**",                            inline=True)
-    e.add_field(name="💜 Boost Level", value=f"Level **{g.premium_tier}**",                    inline=True)
-    e.add_field(name="🚀 Boosts",      value=f"**{g.premium_subscription_count}**",            inline=True)
-    e.add_field(name="📅 Age",         value=f"**{age}** days",                                inline=True)
-    e.add_field(name="✨ Features",    value=", ".join(features),                               inline=False)
-    e.add_field(name="📊 Statistics",
-                value=f"Joins: **{stats['joins']}**  •  Leaves: **{stats['leaves']}**  •  Messages: **{stats['messages']}**  •  Mod Actions: **{stats['mod_actions']}**",
+    e.add_field(name="👑  Owner",        value=g.owner.mention if g.owner else "?",                   inline=True)
+    e.add_field(name="📅  Created",      value=f"<t:{int(g.created_at.timestamp())}:R>",              inline=True)
+    e.add_field(name="🆔  Server ID",    value=f"`{g.id}`",                                           inline=True)
+    e.add_field(name="👥  Members",      value=f"**{g.member_count:,}** total\n`{humans:,}` humans  `{bots}` bots", inline=True)
+    e.add_field(name="💬  Channels",     value=f"**{len(g.text_channels)}** text\n**{len(g.voice_channels)}** voice", inline=True)
+    e.add_field(name="🎭  Roles",        value=f"**{len(g.roles)}** roles",                           inline=True)
+    e.add_field(name="💜  Boost Level",  value=f"Level **{g.premium_tier}**\n`{boost_bars}`",         inline=True)
+    e.add_field(name="🚀  Boosts",       value=f"**{g.premium_subscription_count}** boosts",          inline=True)
+    e.add_field(name="🗓️  Age",          value=f"**{age}** days old",                                 inline=True)
+    e.add_field(name="✨  Features",     value="\n".join(features),                                    inline=False)
+    e.add_field(name="📊  Activity",
+                value=(f"Joins **{stats['joins']}**  ·  Leaves **{stats['leaves']}**  ·  "
+                       f"Messages **{stats['messages']:,}**  ·  Mod Actions **{stats['mod_actions']}**"),
                 inline=False)
     ft(e, "Crimson Gen", bot.user.display_avatar.url)
     await interaction.response.send_message(embed=e)
@@ -1337,29 +1346,32 @@ async def serverinfo(interaction: discord.Interaction):
 @bot.tree.command(name="userinfo", description="View detailed information about a user")
 @app_commands.describe(user="User to inspect (defaults to yourself)")
 async def userinfo(interaction: discord.Interaction, user: discord.Member = None):
-    user = user or interaction.user
+    user  = user or interaction.user
     color = user.color if user.color != discord.Color.default() else discord.Color.from_rgb(220, 20, 60)
-    e = discord.Embed(title=f"👤  {user.name}", color=color, timestamp=datetime.utcnow())
+    warns = len(warnings_db.get(user.id, []))
+    e = discord.Embed(color=color, timestamp=datetime.utcnow())
+    e.description = f"## {user.mention}\n`{user.name}`"
     e.set_thumbnail(url=user.display_avatar.url)
-    e.add_field(name="📛 Display Name",    value=user.display_name,                                    inline=True)
-    e.add_field(name="🆔 ID",             value=f"`{user.id}`",                                       inline=True)
-    e.add_field(name="🤖 Bot",            value="Yes" if user.bot else "No",                           inline=True)
-    e.add_field(name="📅 Created",        value=f"<t:{int(user.created_at.timestamp())}:R>",           inline=True)
-    e.add_field(name="📥 Joined",         value=f"<t:{int(user.joined_at.timestamp())}:R>",            inline=True)
-    e.add_field(name="⚠️ Warnings",       value=str(len(warnings_db.get(user.id, []))),               inline=True)
+    e.add_field(name="🆔  User ID",      value=f"`{user.id}`",                                        inline=True)
+    e.add_field(name="🤖  Bot",          value="Yes" if user.bot else "No",                            inline=True)
+    e.add_field(name="⚠️  Warnings",     value=f"**{warns}**",                                        inline=True)
+    e.add_field(name="📅  Account Created", value=f"<t:{int(user.created_at.timestamp())}:R>",        inline=True)
+    e.add_field(name="📥  Joined Server",   value=f"<t:{int(user.joined_at.timestamp())}:R>",         inline=True)
+    e.add_field(name="🎨  Top Role",     value=user.top_role.mention,                                  inline=True)
     badges = []
-    flags = user.public_flags
-    if flags.staff:              badges.append("👨‍💼 Discord Staff")
-    if flags.partner:            badges.append("🤝 Partner")
-    if flags.hypesquad:          badges.append("🏠 HypeSquad")
-    if flags.bug_hunter:         badges.append("🐛 Bug Hunter")
-    if flags.early_supporter:    badges.append("⭐ Early Supporter")
+    flags  = user.public_flags
+    if flags.staff:                  badges.append("👨‍💼 Discord Staff")
+    if flags.partner:                badges.append("🤝 Partner")
+    if flags.hypesquad:              badges.append("🏠 HypeSquad")
+    if flags.bug_hunter:             badges.append("🐛 Bug Hunter")
+    if flags.early_supporter:        badges.append("⭐ Early Supporter")
     if flags.verified_bot_developer: badges.append("🛠️ Bot Developer")
-    if badges: e.add_field(name="🏅 Badges", value="\n".join(badges), inline=False)
-    roles = [r.mention for r in user.roles[1:]]
+    if badges:
+        e.add_field(name="🏅  Badges", value="  ".join(badges), inline=False)
+    roles = [r.mention for r in reversed(user.roles[1:])]
     if roles:
-        val = " ".join(roles[:15]) + (f" +{len(roles)-15} more" if len(roles) > 15 else "")
-        e.add_field(name=f"🎭 Roles ({len(roles)})", value=val, inline=False)
+        val = " ".join(roles[:20]) + (f"\n*+{len(roles)-20} more*" if len(roles) > 20 else "")
+        e.add_field(name=f"🎭  Roles ({len(roles)})", value=val, inline=False)
     ft(e, f"Requested by {interaction.user.name}", interaction.user.display_avatar.url)
     await interaction.response.send_message(embed=e)
 
@@ -1367,38 +1379,78 @@ async def userinfo(interaction: discord.Interaction, user: discord.Member = None
 @app_commands.describe(user="User whose avatar to view")
 async def avatar(interaction: discord.Interaction, user: discord.Member = None):
     user = user or interaction.user
-    e = _base(f"🖼️  {user.name}'s Avatar", color=C_CRIMSON)
+    e    = _base("", color=user.color if user.color != discord.Color.default() else C_CRIMSON)
+    e.description = f"## 🖼️  {user.display_name}'s Avatar"
     e.set_image(url=user.display_avatar.url)
-    e.add_field(name="📥 Download",
-                value=f"[PNG]({user.display_avatar.with_format('png').url})  ·  [JPEG]({user.display_avatar.with_format('jpeg').url})  ·  [WEBP]({user.display_avatar.with_format('webp').url})")
+    e.add_field(
+        name="📥  Download",
+        value=(f"[`PNG`]({user.display_avatar.with_format('png').url})  ·  "
+               f"[`JPEG`]({user.display_avatar.with_format('jpeg').url})  ·  "
+               f"[`WEBP`]({user.display_avatar.with_format('webp').url})"),
+        inline=False
+    )
     ft(e, f"Requested by {interaction.user.name}", interaction.user.display_avatar.url)
     await interaction.response.send_message(embed=e)
 
 @bot.tree.command(name="announce", description="Send a formatted announcement to a channel")
 @app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(channel="Target channel", title="Announcement title", message="Announcement content")
-async def announce(interaction: discord.Interaction, channel: discord.TextChannel, title: str, message: str):
-    e = _base(f"📢  {title}", message, C_CRIMSON)
-    ft(e, f"Announced by {interaction.user.name}", interaction.user.display_avatar.url)
-    await channel.send(embed=e)
-    await interaction.response.send_message(embed=ok("Announcement Sent!", f"Posted in {channel.mention}."), ephemeral=True)
+@app_commands.describe(
+    channel="Channel to post the announcement in",
+    title="Announcement title",
+    message="Announcement body (supports markdown)",
+    ping="Role to ping with the announcement (optional)"
+)
+async def announce(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    title: str,
+    message: str,
+    ping: discord.Role = None
+):
+    now = int(datetime.utcnow().timestamp())
+    e   = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+    e.description = f"## 📢  {title}\n\n{message}"
+    e.set_author(
+        name=interaction.guild.name,
+        icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+    )
+    e.add_field(name="📅  Posted", value=f"<t:{now}:F>",                  inline=True)
+    e.add_field(name="📣  By",     value=interaction.user.mention,          inline=True)
+    e.set_footer(
+        text=f"Announcement  ·  {interaction.guild.name}",
+        icon_url=bot.user.display_avatar.url
+    )
+    content = ping.mention if ping else None
+    await channel.send(content=content, embed=e)
+    conf = _base("", color=C_SUCCESS)
+    conf.description = f"✅  Announcement posted in {channel.mention}"
+    await interaction.response.send_message(embed=conf, ephemeral=True)
 
 @bot.tree.command(name="invite", description="Get the bot invite link")
 async def invite(interaction: discord.Interaction):
-    e = _base("🤖  Invite Crimson Gen", color=C_CRIMSON)
-    e.description = "[**Click here** to add me to your server!](https://discord.com/oauth2/authorize?client_id=1295074164230717573&permissions=8&integration_type=0&scope=bot)"
+    e = _base("", color=C_CRIMSON)
+    e.description = (
+        f"## 🤖  Crimson Gen\n"
+        f"[**Click here to invite me**](https://discord.com/oauth2/authorize?client_id=1295074164230717573&permissions=8&integration_type=0&scope=bot) "
+        f"to your server!\n\u200b"
+    )
     e.set_thumbnail(url=bot.user.display_avatar.url)
     e.add_field(
-        name="📋 Features",
-        value=(
-            "🎟️ Advanced Ticket System  •  👋 Welcome/Leave\n"
-            "🛡️ Antinuke  •  ⚠️ Warnings  •  💤 AFK\n"
-            "😂 Memes  •  🎭 Reaction Roles  •  😎 Emoji Steal\n"
-            "✅ Vouch System  •  💜 Boost Announcements"
-        ),
+        name="🎟️  Ticketing",
+        value="Advanced ticket system with categories, staff controls, and auto-close",
         inline=False
     )
-    ft(e, "Crimson Gen")
+    e.add_field(
+        name="🛡️  Security",
+        value="Antinuke protection + full AutoMod with scam detection and auto-timeout",
+        inline=False
+    )
+    e.add_field(
+        name="⚙️  Utilities",
+        value="Warnings, AFK, Memes, Reaction Roles, Emoji Steal, Vouch System, and more",
+        inline=False
+    )
+    ft(e, "Crimson Gen", bot.user.display_avatar.url)
     await interaction.response.send_message(embed=e)
 
 @bot.tree.command(name="fixcommands", description="Re-sync all slash commands (admin)")
@@ -1834,167 +1886,322 @@ async def antinuke_setlog(interaction: discord.Interaction, channel: discord.Tex
 #  AUTO-MODERATION COMMANDS
 # ══════════════════════════════════════════════════════════
 
-@bot.tree.command(name="automod", description="Toggle AutoMod on or off")
+# ══════════════════════════════════════════════════════════
+#  AUTOMOD COMMANDS
+# ══════════════════════════════════════════════════════════
+
+FILTER_LABELS = {
+    "filter_profanity":  ("🤬", "Profanity",        "Blocks banned words and slurs"),
+    "filter_invites":    ("📨", "Invite Links",      "Blocks Discord server invite links"),
+    "filter_links":      ("🔗", "All Links",         "Blocks all http/www links"),
+    "filter_scam":       ("🎣", "Scam Detection",    "Blocks known phishing & scam domains"),
+    "filter_caps":       ("🔊", "Excessive Caps",    "Blocks messages that are >70% caps"),
+    "filter_spam":       ("⚡", "Spam",              f"Blocks {SPAM_COUNT}+ msgs in {SPAM_WINDOW}s"),
+    "filter_mentions":   ("📢", "Mass Mentions",     f"Blocks {MENTION_MAX}+ mentions in one message"),
+    "filter_zalgo":      ("🔀", "Zalgo Text",        "Blocks corrupted/zalgo characters"),
+    "filter_emoji":      ("😂", "Emoji Spam",        "Blocks 8+ emojis in one message"),
+    "filter_duplicates": ("📋", "Duplicates",        f"Blocks same message sent {DUP_COUNT}x in {DUP_WINDOW}s"),
+    "filter_length":     ("📏", "Long Messages",     f"Blocks messages over {MAX_MSG_LEN} characters"),
+    "warn_on_delete":    ("⚠️", "Warn on Delete",   "Sends a warning when a message is removed"),
+    "auto_timeout":      ("⏱️", "Auto Timeout",      "Times out repeat offenders automatically"),
+}
+
+def _build_automod_embed(guild: discord.Guild, cfg: dict) -> discord.Embed:
+    """Build the full AutoMod dashboard embed."""
+    on     = cfg["enabled"]
+    status = "🟢  **ENABLED**" if on else "🔴  **DISABLED**"
+    col    = C_SUCCESS if on else C_ERROR
+    log_ch = f"<#{cfg['log_channel']}>" if cfg["log_channel"] else "`Not set`"
+
+    e = discord.Embed(color=col, timestamp=datetime.utcnow())
+    e.description = (
+        f"## 🤖  AutoMod System\n"
+        f"> Status: {status}\n"
+        f"> Log Channel: {log_ch}\n"
+        f"> Auto Timeout: {'🟢 On' if cfg.get('auto_timeout') else '🔴 Off'}"
+        f"  ·  Warn on Delete: {'🟢 On' if cfg.get('warn_on_delete') else '🔴 Off'}"
+    )
+    if guild.icon:
+        e.set_thumbnail(url=guild.icon.url)
+
+    # ── Filter status split into two columns ──────────────────
+    filters_left = [
+        "filter_profanity", "filter_invites", "filter_links",
+        "filter_scam",      "filter_caps",    "filter_spam",
+    ]
+    filters_right = [
+        "filter_mentions",   "filter_zalgo", "filter_emoji",
+        "filter_duplicates", "filter_length",
+    ]
+
+    def row(key):
+        emoji, label, _ = FILTER_LABELS[key]
+        dot = "🟢" if cfg.get(key, False) else "🔴"
+        return f"{dot} {emoji} {label}"
+
+    e.add_field(
+        name="🔍  Filters",
+        value="\n".join(row(k) for k in filters_left),
+        inline=True
+    )
+    e.add_field(
+        name="\u200b",
+        value="\n".join(row(k) for k in filters_right),
+        inline=True
+    )
+    e.add_field(name="\u200b", value="\u200b", inline=True)  # spacer
+
+    # ── Whitelist info ────────────────────────────────────────
+    wl_roles = [f"<@&{r}>" for r in cfg["whitelist_roles"]] or ["`None`"]
+    wl_chs   = [f"<#{c}>" for c in cfg["whitelist_channels"]] or ["`None`"]
+    e.add_field(name="🎭  Whitelisted Roles",    value=" ".join(wl_roles[:10]),  inline=True)
+    e.add_field(name="💬  Whitelisted Channels", value=" ".join(wl_chs[:10]),    inline=True)
+    e.add_field(name="🚫  Custom Words",
+                value=f"`{len(cfg['custom_words'])}` word(s) banned",            inline=True)
+
+    # Strike thresholds
+    e.add_field(
+        name="⏱️  Strike → Timeout Thresholds",
+        value="3 strikes → 1 min  ·  5 strikes → 5 min  ·  7 strikes → 1 hour",
+        inline=False
+    )
+
+    e.set_footer(text=f"Crimson Gen • AutoMod  ·  {guild.name}", icon_url=guild.me.display_avatar.url)
+    return e
+
+
+@bot.tree.command(name="automod", description="View and manage the AutoMod dashboard")
 @app_commands.checks.has_permissions(administrator=True)
-async def automod_toggle(interaction: discord.Interaction):
+async def automod_cmd(interaction: discord.Interaction):
     cfg = get_automod(interaction.guild.id)
-    cfg["enabled"] = not cfg["enabled"]
-    now_on = cfg["enabled"]
-    e = _base("🤖  AutoMod System",
-              f"AutoMod is now **{'🟢 ENABLED' if now_on else '🔴 DISABLED'}**",
-              C_SUCCESS if now_on else C_ERROR)
-    _add_automod_fields(e, cfg)
-    ft(e, "Crimson Gen • AutoMod", interaction.guild.me.display_avatar.url)
+    e   = _build_automod_embed(interaction.guild, cfg)
     await interaction.response.send_message(embed=e, ephemeral=True)
 
-def _add_automod_fields(e: discord.Embed, cfg: dict):
-    """Shared helper — adds filter status fields to an embed."""
-    def s(v): return "🟢 On" if v else "🔴 Off"
-    e.add_field(name="🔍  Active Filters",
-                value=(
-                    f"Profanity: {s(cfg['filter_profanity'])}\n"
-                    f"Invites: {s(cfg['filter_invites'])}\n"
-                    f"Links: {s(cfg['filter_links'])}\n"
-                    f"Caps: {s(cfg['filter_caps'])}\n"
-                    f"Spam: {s(cfg['filter_spam'])}\n"
-                    f"Mass Mentions: {s(cfg['filter_mentions'])}\n"
-                    f"Zalgo Text: {s(cfg['filter_zalgo'])}\n"
-                    f"Emoji Spam: {s(cfg['filter_emoji'])}\n"
-                    f"Duplicates: {s(cfg.get('filter_duplicates', True))}\n"
-                    f"Scam Links: {s(cfg.get('filter_scam', True))}\n"
-                    f"Long Messages: {s(cfg.get('filter_length', False))}\n"
-                    f"Auto Timeout: {s(cfg.get('auto_timeout', True))}"
-                ), inline=True)
-    log_str = f"<#{cfg['log_channel']}>" if cfg["log_channel"] else "Not set"
-    e.add_field(name="⚙️  Settings",
-                value=(
-                    f"Warn on Delete: {s(cfg['warn_on_delete'])}\n"
-                    f"Log Channel: {log_str}\n"
-                    f"Custom Words: **{len(cfg['custom_words'])}**\n"
-                    f"Whitelisted Roles: **{len(cfg['whitelist_roles'])}**\n"
-                    f"Whitelisted Channels: **{len(cfg['whitelist_channels'])}**"
-                ), inline=True)
+
+@bot.tree.command(name="automod_toggle", description="Enable or disable AutoMod entirely")
+@app_commands.checks.has_permissions(administrator=True)
+async def automod_toggle(interaction: discord.Interaction):
+    cfg           = get_automod(interaction.guild.id)
+    cfg["enabled"] = not cfg["enabled"]
+    on             = cfg["enabled"]
+    e = discord.Embed(color=C_SUCCESS if on else C_ERROR, timestamp=datetime.utcnow())
+    e.description  = (
+        f"## {'✅' if on else '❌'}  AutoMod {'Enabled' if on else 'Disabled'}\n"
+        f"> AutoMod is now **{'🟢 ACTIVE' if on else '🔴 INACTIVE'}** for this server."
+    )
+    e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
+    await interaction.response.send_message(embed=e, ephemeral=True)
+
 
 @bot.tree.command(name="automod_status", description="View the full AutoMod dashboard")
 @app_commands.checks.has_permissions(manage_guild=True)
 async def automod_status(interaction: discord.Interaction):
     cfg = get_automod(interaction.guild.id)
-    e = _base("🤖  AutoMod Dashboard",
-              f"Status: **{'🟢 Enabled' if cfg['enabled'] else '🔴 Disabled'}**",
-              C_SUCCESS if cfg["enabled"] else C_ERROR)
-    _add_automod_fields(e, cfg)
+    e   = _build_automod_embed(interaction.guild, cfg)
     if cfg["custom_words"]:
-        e.add_field(name=f"🚫 Custom Banned Words ({len(cfg['custom_words'])})",
-                    value="||" + ", ".join(cfg["custom_words"]) + "||", inline=False)
-    ft(e, "Crimson Gen • AutoMod", interaction.guild.me.display_avatar.url)
+        words = " · ".join(f"||`{w}`||" for w in cfg["custom_words"])
+        e.add_field(
+            name=f"📝  Banned Words ({len(cfg['custom_words'])})",
+            value=words[:1000],
+            inline=False
+        )
     await interaction.response.send_message(embed=e, ephemeral=True)
+
 
 @bot.tree.command(name="automod_filter", description="Toggle a specific AutoMod filter on or off")
 @app_commands.checks.has_permissions(administrator=True)
 @app_commands.describe(filter_name="Which filter to toggle")
 @app_commands.choices(filter_name=[
-    app_commands.Choice(name="🤬 Profanity / bad words",    value="filter_profanity"),
-    app_commands.Choice(name="📨 Discord invites",           value="filter_invites"),
-    app_commands.Choice(name="🔗 All links",                 value="filter_links"),
-    app_commands.Choice(name="🔊 Excessive CAPS",            value="filter_caps"),
-    app_commands.Choice(name="⚡ Message spam",              value="filter_spam"),
-    app_commands.Choice(name="📢 Mass mentions",             value="filter_mentions"),
-    app_commands.Choice(name="🔀 Zalgo / corrupted text",    value="filter_zalgo"),
-    app_commands.Choice(name="😂 Emoji spam",                value="filter_emoji"),
-    app_commands.Choice(name="⚠️ Warn user on delete",      value="warn_on_delete"),
+    app_commands.Choice(name="🤬 Profanity / bad words",         value="filter_profanity"),
+    app_commands.Choice(name="📨 Discord invite links",           value="filter_invites"),
+    app_commands.Choice(name="🔗 All links",                      value="filter_links"),
+    app_commands.Choice(name="🎣 Scam / phishing detection",      value="filter_scam"),
+    app_commands.Choice(name="🔊 Excessive CAPS",                 value="filter_caps"),
+    app_commands.Choice(name="⚡ Message spam",                   value="filter_spam"),
+    app_commands.Choice(name="📢 Mass mentions",                  value="filter_mentions"),
+    app_commands.Choice(name="🔀 Zalgo / corrupted text",         value="filter_zalgo"),
+    app_commands.Choice(name="😂 Emoji spam",                     value="filter_emoji"),
+    app_commands.Choice(name="📋 Duplicate messages",             value="filter_duplicates"),
+    app_commands.Choice(name="📏 Long messages",                  value="filter_length"),
+    app_commands.Choice(name="⚠️ Warn user on delete",           value="warn_on_delete"),
+    app_commands.Choice(name="⏱️ Auto timeout on repeat offense", value="auto_timeout"),
 ])
 async def automod_filter(interaction: discord.Interaction, filter_name: str):
-    cfg = get_automod(interaction.guild.id)
-    cfg[filter_name] = not cfg[filter_name]
-    now_on = cfg[filter_name]
-    labels = {
-        "filter_profanity": "Profanity Filter",   "filter_invites": "Invite Filter",
-        "filter_links": "Link Filter",             "filter_caps": "Caps Filter",
-        "filter_spam": "Spam Filter",              "filter_mentions": "Mass Mention Filter",
-        "filter_zalgo": "Zalgo Filter",            "filter_emoji": "Emoji Spam Filter",
-        "warn_on_delete": "Warn on Delete",
-    }
-    e = ok(f"{labels.get(filter_name, filter_name)} {'Enabled' if now_on else 'Disabled'}",
-           f"{'🟢' if now_on else '🔴'} **{labels.get(filter_name, filter_name)}** is now **{'on' if now_on else 'off'}**.")
-    ft(e, "Crimson Gen • AutoMod", interaction.guild.me.display_avatar.url)
+    cfg             = get_automod(interaction.guild.id)
+    cfg[filter_name] = not cfg.get(filter_name, False)
+    on              = cfg[filter_name]
+    emoji, label, desc = FILTER_LABELS.get(filter_name, ("⚙️", filter_name, ""))
+    col = C_SUCCESS if on else C_ERROR
+    e   = discord.Embed(color=col, timestamp=datetime.utcnow())
+    e.description = (
+        f"## {'✅' if on else '❌'}  {label} {'Enabled' if on else 'Disabled'}\n"
+        f"> {emoji} **{label}** is now **{'🟢 ON' if on else '🔴 OFF'}**\n"
+        f"> *{desc}*"
+    )
+    e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
     await interaction.response.send_message(embed=e, ephemeral=True)
+
 
 @bot.tree.command(name="automod_setlog", description="Set the channel where AutoMod logs are sent")
 @app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(channel="Channel for AutoMod logs")
+@app_commands.describe(channel="Channel to send AutoMod logs to")
 async def automod_setlog(interaction: discord.Interaction, channel: discord.TextChannel):
     get_automod(interaction.guild.id)["log_channel"] = channel.id
-    e = ok("AutoMod Log Channel Set", f"AutoMod logs will be sent to {channel.mention}.")
-    ft(e, "Crimson Gen • AutoMod", interaction.guild.me.display_avatar.url)
+    e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
+    e.description = (
+        f"## ✅  Log Channel Set\n"
+        f"> AutoMod logs will now be sent to {channel.mention}"
+    )
+    e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
     await interaction.response.send_message(embed=e, ephemeral=True)
+
 
 @bot.tree.command(name="automod_addword", description="Add a word to the custom banned words list")
 @app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(word="Word to ban (case-insensitive)")
+@app_commands.describe(word="Word to ban (case-insensitive, partial match)")
 async def automod_addword(interaction: discord.Interaction, word: str):
     cfg = get_automod(interaction.guild.id)
-    w = word.lower().strip()
+    w   = word.lower().strip()
     if w in cfg["custom_words"]:
-        return await interaction.response.send_message(embed=warn("Already Banned", f"`{w}` is already in the banned words list."), ephemeral=True)
+        e = discord.Embed(color=C_WARNING, timestamp=datetime.utcnow())
+        e.description = f"## ⚠️  Already Banned\n> `{w}` is already in the banned words list."
+        return await interaction.response.send_message(embed=e, ephemeral=True)
     cfg["custom_words"].append(w)
-    e = ok("Word Added", f"||`{w}`|| has been added to the banned words list.\nTotal: **{len(cfg['custom_words'])}** custom words.")
-    ft(e, "Crimson Gen • AutoMod")
+    e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
+    e.description = (
+        f"## ✅  Word Added\n"
+        f"> ||`{w}`|| has been added to the banned list.\n"
+        f"> Total custom words: **{len(cfg['custom_words'])}**"
+    )
+    e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
     await interaction.response.send_message(embed=e, ephemeral=True)
+
 
 @bot.tree.command(name="automod_removeword", description="Remove a word from the custom banned words list")
 @app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(word="Word to remove")
+@app_commands.describe(word="Word to unban")
 async def automod_removeword(interaction: discord.Interaction, word: str):
     cfg = get_automod(interaction.guild.id)
-    w = word.lower().strip()
+    w   = word.lower().strip()
     if w not in cfg["custom_words"]:
-        return await interaction.response.send_message(embed=err("Not Found", f"`{w}` is not in the banned words list."), ephemeral=True)
+        e = discord.Embed(color=C_ERROR, timestamp=datetime.utcnow())
+        e.description = f"## ❌  Not Found\n> `{w}` is not in the custom banned words list."
+        return await interaction.response.send_message(embed=e, ephemeral=True)
     cfg["custom_words"].remove(w)
-    e = ok("Word Removed", f"`{w}` has been removed.\nRemaining: **{len(cfg['custom_words'])}** custom words.")
-    ft(e, "Crimson Gen • AutoMod")
+    e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
+    e.description = (
+        f"## ✅  Word Removed\n"
+        f"> `{w}` has been removed from the banned list.\n"
+        f"> Remaining custom words: **{len(cfg['custom_words'])}**"
+    )
+    e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
     await interaction.response.send_message(embed=e, ephemeral=True)
 
-@bot.tree.command(name="automod_whitelist", description="Whitelist or un-whitelist a role or channel from AutoMod")
+
+@bot.tree.command(name="automod_words", description="View all custom banned words")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def automod_words(interaction: discord.Interaction):
+    cfg = get_automod(interaction.guild.id)
+    e   = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+    if not cfg["custom_words"]:
+        e.description = "## 📝  Custom Banned Words\n> No custom words added yet."
+    else:
+        words = "\n".join(f"`{i+1}.` ||`{w}`||" for i, w in enumerate(cfg["custom_words"]))
+        e.description = f"## 📝  Custom Banned Words ({len(cfg['custom_words'])})\n{words[:3000]}"
+    e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
+    await interaction.response.send_message(embed=e, ephemeral=True)
+
+
+@bot.tree.command(name="automod_whitelist", description="Add or remove a role/channel from the AutoMod whitelist")
 @app_commands.checks.has_permissions(administrator=True)
 @app_commands.describe(
-    target_type="Whether to whitelist a role or channel",
     action="Add or remove from whitelist",
-    role="Role to whitelist",
-    channel="Channel to whitelist"
+    role="Role to whitelist (immune to all AutoMod)",
+    channel="Channel to whitelist (AutoMod won't scan it)"
 )
-@app_commands.choices(
-    target_type=[
-        app_commands.Choice(name="🎭 Role",    value="role"),
-        app_commands.Choice(name="💬 Channel", value="channel"),
-    ],
-    action=[
-        app_commands.Choice(name="✅ Add",    value="add"),
-        app_commands.Choice(name="❌ Remove", value="remove"),
-    ]
-)
+@app_commands.choices(action=[
+    app_commands.Choice(name="✅ Add to whitelist",      value="add"),
+    app_commands.Choice(name="❌ Remove from whitelist", value="remove"),
+])
 async def automod_whitelist(interaction: discord.Interaction,
-                             target_type: str, action: str,
+                             action: str,
                              role: discord.Role = None,
                              channel: discord.TextChannel = None):
-    cfg = get_automod(interaction.guild.id)
-    if target_type == "role":
-        if not role:
-            return await interaction.response.send_message(embed=err("Missing Role", "Please select a role."), ephemeral=True)
-        lst = cfg["whitelist_roles"]
-        target, name = role.id, role.mention
-    else:
-        if not channel:
-            return await interaction.response.send_message(embed=err("Missing Channel", "Please select a channel."), ephemeral=True)
-        lst = cfg["whitelist_channels"]
-        target, name = channel.id, channel.mention
+    if not role and not channel:
+        e = discord.Embed(color=C_ERROR, timestamp=datetime.utcnow())
+        e.description = "## ❌  Missing Target\n> Please provide a role or channel to whitelist."
+        return await interaction.response.send_message(embed=e, ephemeral=True)
 
-    if action == "add":
-        if target not in lst: lst.append(target)
-        e = ok("Whitelist Updated", f"{name} has been **added** to the AutoMod whitelist.\nMessages from this {'role' if target_type == 'role' else 'channel'} will not be scanned.")
-    else:
-        if target in lst: lst.remove(target)
-        e = ok("Whitelist Updated", f"{name} has been **removed** from the AutoMod whitelist.")
-    ft(e, "Crimson Gen • AutoMod")
+    cfg    = get_automod(interaction.guild.id)
+    lines  = []
+
+    if role:
+        lst = cfg["whitelist_roles"]
+        if action == "add":
+            if role.id not in lst: lst.append(role.id)
+            lines.append(f"✅ {role.mention} added to role whitelist")
+        else:
+            if role.id in lst: lst.remove(role.id)
+            lines.append(f"❌ {role.mention} removed from role whitelist")
+
+    if channel:
+        lst = cfg["whitelist_channels"]
+        if action == "add":
+            if channel.id not in lst: lst.append(channel.id)
+            lines.append(f"✅ {channel.mention} added to channel whitelist")
+        else:
+            if channel.id in lst: lst.remove(channel.id)
+            lines.append(f"❌ {channel.mention} removed from channel whitelist")
+
+    e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
+    e.description = f"## ✅  Whitelist Updated\n> " + "\n> ".join(lines)
+    e.add_field(
+        name="📊  Current Whitelist",
+        value=(
+            f"🎭 **{len(cfg['whitelist_roles'])}** role(s)  ·  "
+            f"💬 **{len(cfg['whitelist_channels'])}** channel(s)"
+        ),
+        inline=False
+    )
+    e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
+    await interaction.response.send_message(embed=e, ephemeral=True)
+
+
+@bot.tree.command(name="automod_reset", description="Reset all AutoMod strikes for a user")
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(user="User whose strikes to reset")
+async def automod_reset(interaction: discord.Interaction, user: discord.Member):
+    gid = interaction.guild.id
+    automod_warn_count.setdefault(gid, {})
+    old = automod_warn_count[gid].pop(user.id, 0)
+    e   = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
+    e.description = (
+        f"## ✅  Strikes Reset\n"
+        f"> {user.mention}'s AutoMod strikes have been cleared.\n"
+        f"> Previous strikes: **{old}** → **0**"
+    )
+    e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
+    await interaction.response.send_message(embed=e, ephemeral=True)
+
+
+@bot.tree.command(name="automod_strikes", description="Check how many AutoMod strikes a user has")
+@app_commands.checks.has_permissions(manage_messages=True)
+@app_commands.describe(user="User to check")
+async def automod_strikes(interaction: discord.Interaction, user: discord.Member):
+    strikes = automod_warn_count.get(interaction.guild.id, {}).get(user.id, 0)
+    next_to = next((t for t in sorted(STRIKE_TIMEOUT) if t > strikes), None)
+    col = C_SUCCESS if strikes == 0 else C_WARNING if strikes < 5 else C_ERROR
+    e   = discord.Embed(color=col, timestamp=datetime.utcnow())
+    e.set_thumbnail(url=user.display_avatar.url)
+    e.description = (
+        f"## ⚡  AutoMod Strikes — {user.display_name}\n"
+        f"> Current strikes: **{strikes}**\n"
+        f"> Next timeout at: **{next_to} strikes**" if next_to else
+        f"## ⚡  AutoMod Strikes — {user.display_name}\n"
+        f"> Current strikes: **{strikes}**\n"
+        f"> ⚠️ Maximum threshold reached"
+    )
+    e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
     await interaction.response.send_message(embed=e, ephemeral=True)
 
 
