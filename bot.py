@@ -114,76 +114,119 @@ AN_THRESHOLD = 3
 AN_TIMEFRAME = 10
 
 # ── Auto-Moderation ──
-# Per-guild config: all off by default
-automod_cfg = {}
-# {guild_id: {
-#   "enabled":        bool,
-#   "log_channel":    int|None,
-#   "filter_profanity": bool,
-#   "filter_invites": bool,
-#   "filter_links":   bool,
-#   "filter_caps":    bool,          # >70% caps & len>8
-#   "filter_spam":    bool,          # 5 msgs in 5s
-#   "filter_mentions":bool,          # >5 mentions in one msg
-#   "filter_zalgo":   bool,
-#   "filter_emoji":   bool,          # >8 emojis
-#   "warn_on_delete": bool,          # warn user when msg deleted
-#   "custom_words":   [str],         # extra banned words
-#   "whitelist_roles":[int],         # roles immune to automod
-#   "whitelist_channels":[int],      # channels automod ignores
-# }}
+automod_cfg  = {}   # {guild_id: config dict}
+automod_spam = {}   # {guild_id: {user_id: [datetime]}}  — spam tracking
+automod_dup  = {}   # {guild_id: {user_id: [content]}}   — duplicate tracking
+automod_warn_count = {}  # {guild_id: {user_id: int}}    — strike tracking
 
-# Spam tracking: {guild_id: {user_id: [datetime]}}
-automod_spam = {}
-
-# Default bad-word list (add more as needed)
 DEFAULT_BAD_WORDS = [
     "nigger","nigga","faggot","retard","kys","kill yourself",
     "cunt","slut","whore","rape","nonce","pedo","pedophile",
 ]
 
-INVITE_RE  = re.compile(r"(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)\S+", re.I)
-LINK_RE    = re.compile(r"https?://\S+|www\.\S+", re.I)
+# Scam/phishing domains to always block regardless of link filter
+SCAM_DOMAINS = [
+    "free-nitro","nitro-gift","discord-gift","steamgift","steam-gift",
+    "grabify","iplogger","blasze","ps3cfw","bit.ly/free","freegift",
+    "discordnitro","giveway","giveaways.com","claim-nitro",
+]
+
+INVITE_RE = re.compile(
+    r"(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/|dsc\.gg/|invite\.gg/)\S+", re.I
+)
+# Catches http, https, www links — also catches sneaky dot-spaced links like "google . com"
+LINK_RE = re.compile(
+    r"https?://[^\s]+|www\.[^\s]+|\b\w+\s*\.\s*(com|net|org|gg|io|co|tv|me|xyz|ru|tk|ml|cf|ga)\b", re.I
+)
+# Catches invite bypasses like "discord .gg/xxx" or "disc ord.gg"
+INVITE_BYPASS_RE = re.compile(
+    r"dis\s*c?\s*o?\s*r?\s*d\s*[\.\s]\s*g\s*g\s*/\s*\S+|"
+    r"dis\s*c\s*o\s*r\s*d\s*[\.\s]\s*c\s*o\s*m\s*/\s*invite", re.I
+)
 ZALGO_RE   = re.compile(r"[\u0300-\u036f\u0489]")
 EMOJI_RE   = re.compile(r"<a?:\w+:\d+>|[\U0001F300-\U0001FAFF]")
 CAPS_MIN_LEN = 8
 CAPS_PCT     = 0.70
 SPAM_COUNT   = 5
-SPAM_WINDOW  = 5   # seconds
+SPAM_WINDOW  = 5    # seconds
 MENTION_MAX  = 5
+DUP_COUNT    = 3    # same message X times = spam
+DUP_WINDOW   = 30   # seconds
+MAX_MSG_LEN  = 1200 # characters
+STRIKE_TIMEOUT = {  # strikes → timeout duration in seconds
+    3: 60,
+    5: 300,
+    7: 3600,
+}
 
 def get_automod(guild_id: int) -> dict:
     if guild_id not in automod_cfg:
         automod_cfg[guild_id] = {
-            "enabled": False, "log_channel": None,
-            "filter_profanity": True,  "filter_invites": True,
-            "filter_links": False,     "filter_caps": True,
-            "filter_spam": True,       "filter_mentions": True,
-            "filter_zalgo": True,      "filter_emoji": False,
-            "warn_on_delete": True,    "custom_words": [],
-            "whitelist_roles": [],     "whitelist_channels": [],
+            "enabled":          False,
+            "log_channel":      None,
+            "filter_profanity": True,
+            "filter_invites":   True,
+            "filter_links":     True,    # NOW ON BY DEFAULT
+            "filter_caps":      True,
+            "filter_spam":      True,
+            "filter_mentions":  True,
+            "filter_zalgo":     True,
+            "filter_emoji":     False,
+            "filter_duplicates":True,    # NEW
+            "filter_length":    False,   # NEW — block walls of text
+            "filter_scam":      True,    # NEW — always block scam links
+            "warn_on_delete":   True,
+            "auto_timeout":     True,    # NEW — timeout on repeat offenses
+            "custom_words":     [],
+            "whitelist_roles":  [],
+            "whitelist_channels":[],
         }
     return automod_cfg[guild_id]
 
 def automod_immune(member: discord.Member, cfg: dict) -> bool:
-    """Returns True if the member is immune to automod."""
     if member.guild_permissions.administrator: return True
     if is_staff(member): return True
     if any(r.id in cfg["whitelist_roles"] for r in member.roles): return True
     return False
 
+async def automod_strike(member: discord.Member, guild: discord.Guild, cfg: dict):
+    """Track strikes and auto-timeout repeat offenders."""
+    if not cfg.get("auto_timeout"): return
+    gid = guild.id
+    uid = member.id
+    automod_warn_count.setdefault(gid, {})
+    automod_warn_count[gid][uid] = automod_warn_count[gid].get(uid, 0) + 1
+    strikes = automod_warn_count[gid][uid]
+    for threshold, duration in sorted(STRIKE_TIMEOUT.items()):
+        if strikes == threshold:
+            try:
+                until = discord.utils.utcnow() + timedelta(seconds=duration)
+                await member.timeout(until, reason=f"AutoMod: {strikes} strikes")
+                log_id = cfg.get("log_channel")
+                if log_id and (ch := guild.get_channel(log_id)):
+                    mins = duration // 60 if duration >= 60 else None
+                    dur_str = f"{duration // 3600}h" if duration >= 3600 else f"{duration // 60}m" if mins else f"{duration}s"
+                    e = _base("⏱️  AutoMod — Auto Timeout", color=C_ERROR)
+                    e.set_thumbnail(url=member.display_avatar.url)
+                    e.add_field(name="👤 User",     value=f"{member.mention}\n`{member.id}`", inline=True)
+                    e.add_field(name="⚡ Strikes",  value=str(strikes),                       inline=True)
+                    e.add_field(name="⏱️ Duration", value=dur_str,                            inline=True)
+                    ft(e, "Crimson Gen • AutoMod")
+                    await ch.send(embed=e)
+            except Exception: pass
+            break
+
 async def automod_action(msg: discord.Message, reason: str, cfg: dict):
-    """Delete message, optionally warn, and log."""
+    """Delete message, warn user, log, and track strikes."""
     try: await msg.delete()
     except Exception: pass
 
     member = msg.author
     guild  = msg.guild
 
-    # Warn the user
     if cfg.get("warn_on_delete"):
         try:
-            notif = await msg.channel.send(
+            await msg.channel.send(
                 embed=warn("Message Removed", f"{member.mention} — **{reason}**\nPlease follow the server rules."),
                 delete_after=6
             )
@@ -194,12 +237,15 @@ async def automod_action(msg: discord.Message, reason: str, cfg: dict):
     if log_id and (ch := guild.get_channel(log_id)):
         e = _base("🤖  AutoMod — Message Removed", color=C_WARNING)
         e.set_thumbnail(url=member.display_avatar.url)
-        e.add_field(name="👤 User",    value=f"{member.mention}\n`{member.id}`",      inline=True)
-        e.add_field(name="📍 Channel", value=msg.channel.mention,                      inline=True)
-        e.add_field(name="⚡ Reason",  value=reason,                                   inline=True)
-        e.add_field(name="💬 Content", value=f"```{msg.content[:900] or '[no text]'}```", inline=False)
+        e.add_field(name="👤 User",    value=f"{member.mention}\n`{member.id}`",           inline=True)
+        e.add_field(name="📍 Channel", value=msg.channel.mention,                           inline=True)
+        e.add_field(name="⚡ Reason",  value=reason,                                        inline=True)
+        e.add_field(name="💬 Content", value=f"```{msg.content[:900] or '[no text]'}```",  inline=False)
         ft(e, "Crimson Gen • AutoMod")
         await ch.send(embed=e)
+
+    # Strike system
+    await automod_strike(member, guild, cfg)
 
 # ══════════════════════════════════════════════════════════
 #  EMBED HELPERS
@@ -328,39 +374,69 @@ async def on_message(msg: discord.Message):
             lower   = content.lower()
             blocked = False
 
-            # Profanity / custom words
+            # ── Scam / phishing links (always checked first) ──
+            if not blocked and cfg.get("filter_scam"):
+                if any(s in lower for s in SCAM_DOMAINS):
+                    await automod_action(msg, "Scam / phishing link detected", cfg); blocked = True
+
+            # ── Invite bypass detection ────────────────────────
+            if not blocked and cfg["filter_invites"] and INVITE_BYPASS_RE.search(content):
+                await automod_action(msg, "Unauthorised Discord invite (bypass attempt)", cfg); blocked = True
+
+            # ── Discord invites ────────────────────────────────
+            if not blocked and cfg["filter_invites"] and INVITE_RE.search(content):
+                await automod_action(msg, "Unauthorised Discord invite", cfg); blocked = True
+
+            # ── Links ─────────────────────────────────────────
+            if not blocked and cfg["filter_links"] and LINK_RE.search(content):
+                await automod_action(msg, "Links are not allowed here", cfg); blocked = True
+
+            # ── Profanity / custom words ───────────────────────
             if not blocked and cfg["filter_profanity"]:
                 bad = DEFAULT_BAD_WORDS + cfg.get("custom_words", [])
                 if any(w in lower for w in bad):
                     await automod_action(msg, "Prohibited language", cfg); blocked = True
 
-            # Discord invites
-            if not blocked and cfg["filter_invites"] and INVITE_RE.search(content):
-                await automod_action(msg, "Unauthorised Discord invite", cfg); blocked = True
-
-            # Links
-            if not blocked and cfg["filter_links"] and LINK_RE.search(content):
-                await automod_action(msg, "Links are not allowed here", cfg); blocked = True
-
-            # Excessive caps
+            # ── Excessive caps ─────────────────────────────────
             if not blocked and cfg["filter_caps"] and len(content) >= CAPS_MIN_LEN:
                 letters = [c for c in content if c.isalpha()]
                 if letters and sum(1 for c in letters if c.isupper()) / len(letters) >= CAPS_PCT:
                     await automod_action(msg, "Excessive use of CAPS", cfg); blocked = True
 
-            # Mass mentions
+            # ── Mass mentions ──────────────────────────────────
             if not blocked and cfg["filter_mentions"] and len(msg.mentions) > MENTION_MAX:
                 await automod_action(msg, f"Mass mentions ({len(msg.mentions)} users)", cfg); blocked = True
 
-            # Zalgo text
+            # ── Zalgo text ─────────────────────────────────────
             if not blocked and cfg["filter_zalgo"] and len(ZALGO_RE.findall(content)) > 5:
                 await automod_action(msg, "Zalgo / corrupted text", cfg); blocked = True
 
-            # Emoji spam
+            # ── Emoji spam ─────────────────────────────────────
             if not blocked and cfg["filter_emoji"] and len(EMOJI_RE.findall(content)) > 8:
                 await automod_action(msg, "Excessive emoji spam", cfg); blocked = True
 
-            # Spam (rate limit)
+            # ── Message too long ───────────────────────────────
+            if not blocked and cfg.get("filter_length") and len(content) > MAX_MSG_LEN:
+                await automod_action(msg, f"Message too long ({len(content)} chars, max {MAX_MSG_LEN})", cfg); blocked = True
+
+            # ── Duplicate messages ─────────────────────────────
+            if not blocked and cfg.get("filter_duplicates"):
+                now = datetime.utcnow()
+                gid = msg.guild.id
+                uid = m.id
+                automod_dup.setdefault(gid, {}).setdefault(uid, [])
+                # Keep only recent entries within window
+                automod_dup[gid][uid] = [
+                    (t, c) for t, c in automod_dup[gid][uid]
+                    if (now - t).total_seconds() < DUP_WINDOW
+                ]
+                automod_dup[gid][uid].append((now, lower.strip()))
+                same = sum(1 for _, c in automod_dup[gid][uid] if c == lower.strip())
+                if same >= DUP_COUNT:
+                    automod_dup[gid][uid] = []
+                    await automod_action(msg, f"Duplicate messages ({DUP_COUNT}x in {DUP_WINDOW}s)", cfg); blocked = True
+
+            # ── Spam (rate limit) ──────────────────────────────
             if not blocked and cfg["filter_spam"]:
                 now = datetime.utcnow()
                 automod_spam.setdefault(msg.guild.id, {}).setdefault(m.id, [])
@@ -1783,7 +1859,11 @@ def _add_automod_fields(e: discord.Embed, cfg: dict):
                     f"Spam: {s(cfg['filter_spam'])}\n"
                     f"Mass Mentions: {s(cfg['filter_mentions'])}\n"
                     f"Zalgo Text: {s(cfg['filter_zalgo'])}\n"
-                    f"Emoji Spam: {s(cfg['filter_emoji'])}"
+                    f"Emoji Spam: {s(cfg['filter_emoji'])}\n"
+                    f"Duplicates: {s(cfg.get('filter_duplicates', True))}\n"
+                    f"Scam Links: {s(cfg.get('filter_scam', True))}\n"
+                    f"Long Messages: {s(cfg.get('filter_length', False))}\n"
+                    f"Auto Timeout: {s(cfg.get('auto_timeout', True))}"
                 ), inline=True)
     log_str = f"<#{cfg['log_channel']}>" if cfg["log_channel"] else "Not set"
     e.add_field(name="⚙️  Settings",
