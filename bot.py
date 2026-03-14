@@ -81,6 +81,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ══════════════════════════════════════════════════════════
 afk_users       = {}   # {user_id: {"reason": str, "original_nick": str|None}}
 ticket_counter  = 0
+ticket_transcript_channels = {}  # {guild_id: channel_id}
+ticket_creators = {}             # {channel_id: user_id}
 warnings_db     = {}   # {user_id: [{"reason","moderator","moderator_name","timestamp","guild_id"}]}
 server_stats    = {}   # {guild_id: {"joins","leaves","messages","mod_actions"}}
 vouch_db        = {}   # {guild_id: {user_id: [{"by","by_name","timestamp","proof_url"}]}}
@@ -685,6 +687,7 @@ class TicketCategorySelect(discord.ui.Select):
         if staff_role:
             await channel.send(embed=info_embed, view=StaffTicketInfoView())
 
+        ticket_creators[channel.id] = interaction.user.id
         await interaction.followup.send(f"✅ Your ticket has been created: {channel.mention}", ephemeral=True)
 
 
@@ -777,6 +780,82 @@ class TicketActionsView(discord.ui.View):
         await interaction.channel.delete()
 
 
+async def generate_transcript(channel: discord.TextChannel) -> discord.File:
+    """Scrape all messages and build an HTML transcript file."""
+    messages = []
+    async for msg in channel.history(limit=2000, oldest_first=True):
+        messages.append(msg)
+
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    rows = ""
+    for msg in messages:
+        ts   = msg.created_at.strftime("%H:%M")
+        name = discord.utils.escape_markdown(msg.author.display_name)
+        bot_badge = " <span class='bot'>BOT</span>" if msg.author.bot else ""
+        content = discord.utils.escape_mentions(msg.content or "")
+        # Basic markdown-ish escaping for HTML
+        content = content.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br>")
+        attachments = ""
+        for a in msg.attachments:
+            if any(a.filename.lower().endswith(x) for x in [".png",".jpg",".jpeg",".gif",".webp"]):
+                attachments += f'<br><img src="{a.url}" style="max-width:400px;max-height:300px;border-radius:8px;margin-top:6px;">'
+            else:
+                attachments += f'<br><a href="{a.url}" target="_blank">📎 {a.filename}</a>'
+        embeds = ""
+        for e in msg.embeds:
+            etitle = (e.title or "").replace("&","&amp;").replace("<","&lt;")
+            edesc  = (e.description or "").replace("&","&amp;").replace("<","&lt;").replace("\n","<br>")
+            embeds += f'<div class="embed"><strong>{etitle}</strong><br>{edesc}</div>'
+        rows += f"""
+        <div class="msg">
+            <img class="avatar" src="{msg.author.display_avatar.url}" onerror="this.style.display='none'">
+            <div class="msg-body">
+                <span class="author">{name}{bot_badge}</span>
+                <span class="ts">{ts}</span>
+                <div class="content">{content}{attachments}{embeds}</div>
+            </div>
+        </div>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Transcript — {channel.name}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ background: #1e1f22; color: #dcddde; font-family: 'Segoe UI', sans-serif; font-size: 14px; }}
+  .header {{ background: #2b2d31; padding: 20px 30px; border-bottom: 2px solid #dc143c; }}
+  .header h1 {{ color: #dc143c; font-size: 20px; }}
+  .header p  {{ color: #96989d; font-size: 12px; margin-top: 4px; }}
+  .messages {{ padding: 20px 30px; }}
+  .msg {{ display: flex; gap: 14px; padding: 6px 0; }}
+  .msg:hover {{ background: #2b2d31; border-radius: 8px; padding: 6px 10px; }}
+  .avatar {{ width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0; margin-top: 2px; }}
+  .msg-body {{ flex: 1; }}
+  .author {{ color: #fff; font-weight: 600; font-size: 14px; }}
+  .bot {{ background: #5865f2; color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 4px; margin-left: 5px; vertical-align: middle; }}
+  .ts {{ color: #72767d; font-size: 11px; margin-left: 8px; }}
+  .content {{ color: #dcddde; margin-top: 2px; line-height: 1.5; word-break: break-word; }}
+  .embed {{ background: #2b2d31; border-left: 4px solid #5865f2; padding: 8px 12px; border-radius: 4px; margin-top: 6px; }}
+  a {{ color: #00aff4; }}
+  .footer {{ text-align: center; padding: 20px; color: #72767d; font-size: 11px; border-top: 1px solid #2b2d31; margin-top: 20px; }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📋 Ticket Transcript — #{channel.name}</h1>
+  <p>Generated: {now_str}  ·  {len(messages)} messages  ·  Crimson Gen</p>
+</div>
+<div class="messages">{rows}</div>
+<div class="footer">Crimson Gen Ticket System  ·  {now_str}</div>
+</body>
+</html>"""
+
+    buf = html.encode("utf-8")
+    import io
+    return discord.File(io.BytesIO(buf), filename=f"transcript-{channel.name}.html")
+
+
 class ClosedTicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -794,8 +873,46 @@ class ClosedTicketView(discord.ui.View):
         )
         await interaction.channel.send(embed=embed, view=TicketActionsView())
 
+    @discord.ui.button(label="Transcript", emoji="📋", style=discord.ButtonStyle.primary, custom_id="ticket_transcript_btn")
+    async def save_transcript(self, interaction: discord.Interaction, button: discord.ui.Button):
+        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
+        is_staff_user = (staff_role and staff_role in interaction.user.roles) or interaction.user.guild_permissions.administrator
+        if not is_staff_user:
+            return await interaction.response.send_message("❌ Only staff can save transcripts.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        try:
+            transcript = await generate_transcript(interaction.channel)
+            # Send to user ephemerally
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    description=f"📋 Transcript for **{interaction.channel.name}** generated!",
+                    color=0x5865F2
+                ),
+                file=transcript,
+                ephemeral=True
+            )
+            # Also save to transcript channel if set
+            ch_id = ticket_transcript_channels.get(interaction.guild.id)
+            if ch_id and (log_ch := interaction.guild.get_channel(ch_id)):
+                transcript2 = await generate_transcript(interaction.channel)
+                e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+                e.description = (
+                    f"## 📋  Ticket Transcript\n"
+                    f"> **Channel:** {interaction.channel.name}\n"
+                    f"> **Saved by:** {interaction.user.mention}\n"
+                    f"> **Closed:** <t:{int(datetime.utcnow().timestamp())}:F>"
+                )
+                ft(e, "Crimson Gen • Tickets", interaction.guild.me.display_avatar.url)
+                await log_ch.send(embed=e, file=transcript2)
+        except Exception as ex:
+            await interaction.followup.send(f"❌ Failed to generate transcript: `{ex}`", ephemeral=True)
+
     @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.red, custom_id="ticket_delete_btn")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE_NAME)
+        is_staff_user = (staff_role and staff_role in interaction.user.roles) or interaction.user.guild_permissions.administrator
+        if not is_staff_user:
+            return await interaction.response.send_message("❌ Only staff can delete tickets.", ephemeral=True)
         await interaction.response.send_message("🗑️ Deleting ticket in 3 seconds...")
         await asyncio.sleep(3)
         await interaction.channel.delete()
@@ -819,19 +936,70 @@ class CloseReasonModal(discord.ui.Modal, title="Close Ticket"):
             if staff_role and staff_role not in member.roles:
                 await interaction.channel.set_permissions(member, send_messages=False)
 
-        embed = discord.Embed(
-            title="🔒 Ticket Closed",
-            description=f"This ticket has been closed by {interaction.user.mention}",
-            color=discord.Color.red(),
-            timestamp=datetime.utcnow()
-        )
-        embed.add_field(name="📝 Close Reason:", value=f"```{self.reason.value}```", inline=False)
-        embed.set_footer(text="Use the buttons below to reopen or delete this ticket.")
+        # ── Generate transcript ───────────────────────────────
+        transcript_file  = None
+        transcript_file2 = None
+        try:
+            transcript_file  = await generate_transcript(interaction.channel)
+            transcript_file2 = await generate_transcript(interaction.channel)
+        except Exception:
+            pass
 
-        if staff_role:
-            await interaction.channel.send(content=staff_role.mention, embed=embed, view=ClosedTicketView())
+        # ── Close embed ───────────────────────────────────────
+        embed = discord.Embed(color=discord.Color.red(), timestamp=datetime.utcnow())
+        embed.description = (
+            f"## 🔒  Ticket Closed\n"
+            f"> Closed by {interaction.user.mention}\n"
+            f"> <t:{int(datetime.utcnow().timestamp())}:F>"
+        )
+        embed.add_field(name="📝  Reason", value=f"```{self.reason.value}```", inline=False)
+        embed.set_footer(text="Use the buttons below to reopen, view transcript, or delete.")
+
+        content = staff_role.mention if staff_role else None
+        if transcript_file:
+            await interaction.channel.send(content=content, embed=embed, file=transcript_file, view=ClosedTicketView())
         else:
-            await interaction.channel.send(embed=embed, view=ClosedTicketView())
+            await interaction.channel.send(content=content, embed=embed, view=ClosedTicketView())
+
+        # ── DM transcript to ticket creator ───────────────────
+        creator_id = ticket_creators.get(interaction.channel.id)
+        if creator_id and transcript_file2:
+            try:
+                creator = interaction.guild.get_member(creator_id)
+                if creator:
+                    dm_e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+                    dm_e.description = (
+                        f"## 📋  Your Ticket Transcript\n"
+                        f"> **Server:** {interaction.guild.name}\n"
+                        f"> **Ticket:** `{interaction.channel.name}`\n"
+                        f"> **Closed by:** {interaction.user.display_name}\n"
+                        f"> **Reason:** {self.reason.value}\n\n"
+                        f"Your ticket transcript is attached below. Open it in any browser to view the full conversation."
+                    )
+                    dm_e.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
+                    ft(dm_e, "Crimson Gen • Tickets")
+                    transcript_file2 = await generate_transcript(interaction.channel)
+                    await creator.send(embed=dm_e, file=transcript_file2)
+            except Exception:
+                pass  # DMs may be closed, silently skip
+
+        # ── Auto-send to transcript log channel ───────────────
+        ch_id = ticket_transcript_channels.get(interaction.guild.id)
+        if ch_id and (log_ch := interaction.guild.get_channel(ch_id)):
+            try:
+                transcript_log = await generate_transcript(interaction.channel)
+                log_e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+                log_e.description = (
+                    f"## 📋  Ticket Transcript\n"
+                    f"> **Channel:** `{interaction.channel.name}`\n"
+                    f"> **Closed by:** {interaction.user.mention}\n"
+                    f"> **Reason:** {self.reason.value}\n"
+                    f"> **Time:** <t:{int(datetime.utcnow().timestamp())}:F>"
+                )
+                ft(log_e, "Crimson Gen • Tickets", interaction.guild.me.display_avatar.url)
+                await log_ch.send(embed=log_e, file=transcript_log)
+            except Exception:
+                pass
 
 
 class RenameTicketModal(discord.ui.Modal, title="Rename Ticket"):
@@ -978,6 +1146,58 @@ async def deleteticket(interaction: discord.Interaction):
         await interaction.followup.send("❌ I don't have permission to delete this channel!", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"❌ Failed to delete ticket: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="ticket_transcriptchannel", description="Set or clear the channel where ticket transcripts are saved")
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(channel="Channel to save transcripts to (leave empty to clear)")
+async def ticket_transcriptchannel(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    if channel:
+        ticket_transcript_channels[interaction.guild.id] = channel.id
+        e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
+        e.description = (
+            f"## ✅  Transcript Channel Set\n"
+            f"> Ticket transcripts will automatically be sent to {channel.mention} whenever a ticket is closed.\n"
+            f"> Staff can also manually save transcripts using the 📋 **Transcript** button on closed tickets."
+        )
+    else:
+        ticket_transcript_channels.pop(interaction.guild.id, None)
+        e = discord.Embed(color=C_WARNING, timestamp=datetime.utcnow())
+        e.description = (
+            f"## ✅  Transcript Channel Cleared\n"
+            f"> Transcripts will no longer be auto-saved.\n"
+            f"> Staff can still generate them manually using the 📋 **Transcript** button."
+        )
+    ft(e, "Crimson Gen • Tickets", interaction.guild.me.display_avatar.url)
+    await interaction.response.send_message(embed=e, ephemeral=True)
+
+@bot.tree.command(name="ticket_transcript", description="Manually generate a transcript for the current ticket")
+@app_commands.checks.has_permissions(manage_channels=True)
+async def ticket_transcript(interaction: discord.Interaction):
+    if not interaction.channel.name.startswith("ticket-"):
+        return await interaction.response.send_message("❌ This command can only be used in ticket channels!", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        transcript = await generate_transcript(interaction.channel)
+        e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+        e.description = f"## 📋  Transcript Generated\n> **Channel:** `{interaction.channel.name}`"
+        ft(e, "Crimson Gen • Tickets", interaction.guild.me.display_avatar.url)
+        await interaction.followup.send(embed=e, file=transcript, ephemeral=True)
+
+        # Also post to transcript log channel if set
+        ch_id = ticket_transcript_channels.get(interaction.guild.id)
+        if ch_id and (log_ch := interaction.guild.get_channel(ch_id)):
+            transcript2 = await generate_transcript(interaction.channel)
+            log_e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
+            log_e.description = (
+                f"## 📋  Ticket Transcript\n"
+                f"> **Channel:** `{interaction.channel.name}`\n"
+                f"> **Generated by:** {interaction.user.mention}\n"
+                f"> **Time:** <t:{int(datetime.utcnow().timestamp())}:F>"
+            )
+            ft(log_e, "Crimson Gen • Tickets", interaction.guild.me.display_avatar.url)
+            await log_ch.send(embed=log_e, file=transcript2)
+    except Exception as ex:
+        await interaction.followup.send(f"❌ Failed to generate transcript: `{ex}`", ephemeral=True)
 
 # ══════════════════════════════════════════════════════════
 #  MODERATION
