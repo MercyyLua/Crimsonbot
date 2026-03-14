@@ -89,21 +89,6 @@ boost_channel_id         = BOOST_CHANNEL_ID
 reaction_role_message_id = None
 bot_start_time  = None
 
-# ── AI Chat ──
-AI_ENABLED       = {}   # {guild_id: bool}
-AI_CHANNEL       = {}   # {guild_id: channel_id|None}  None = everywhere
-ai_conversations = {}   # {channel_id: [{"role","content"}]}
-AI_MAX_HISTORY   = 20
-AI_MODEL         = "claude-sonnet-4-20250514"
-ANTHROPIC_API    = "https://api.anthropic.com/v1/messages"
-AI_SYSTEM_PROMPT = (
-    "You are Crimson Gen, a helpful, friendly, and slightly witty Discord bot assistant. "
-    "You help server members with questions, have conversations, give advice, explain things, "
-    "help with code, write things, and generally be useful. "
-    "Keep responses concise and Discord-friendly — no huge walls of text. "
-    "Use markdown formatting where it helps (bold, code blocks, etc). "
-    "Be casual and fun but always helpful. Never be rude or inappropriate."
-)
 
 # ── Antinuke ──
 antinuke_enabled      = {}   # {guild_id: bool}
@@ -470,64 +455,6 @@ async def on_message(msg: discord.Message):
             )
 
 
-    # ── AI Chat ──────────────────────────────────────────────
-    if msg.guild:
-        ai_cfg_on = AI_ENABLED.get(msg.guild.id, False)
-        ai_ch     = AI_CHANNEL.get(msg.guild.id)   # None = any channel
-        in_ai_ch  = (ai_ch is None) or (msg.channel.id == ai_ch)
-        mentioned_bot = bot.user in msg.mentions
-        direct_q = msg.content.lower().startswith(("crimson,", "crimson ", "hey crimson", "bot,", "hey bot"))
-
-        if ai_cfg_on and in_ai_ch and (mentioned_bot or direct_q or ai_ch == msg.channel.id):
-            async with msg.channel.typing():
-                # Strip bot mention from content
-                question = msg.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
-                if not question:
-                    question = "Hey!"
-
-                # Build conversation history
-                cid = msg.channel.id
-                ai_conversations.setdefault(cid, [])
-                ai_conversations[cid].append({"role": "user", "content": question})
-                # Trim history
-                if len(ai_conversations[cid]) > AI_MAX_HISTORY:
-                    ai_conversations[cid] = ai_conversations[cid][-AI_MAX_HISTORY:]
-
-                try:
-                    async with aiohttp.ClientSession() as s:
-                        async with s.post(
-                            ANTHROPIC_API,
-                            headers={
-                                "x-api-key": os.getenv("ANTHROPIC_API_KEY", ""),
-                                "anthropic-version": "2023-06-01",
-                                "content-type": "application/json",
-                            },
-                            json={
-                                "model": AI_MODEL,
-                                "max_tokens": 1024,
-                                "system": AI_SYSTEM_PROMPT,
-                                "messages": ai_conversations[cid],
-                            },
-                            timeout=aiohttp.ClientTimeout(total=30)
-                        ) as r:
-                            if r.status == 200:
-                                data = await r.json()
-                                reply = data["content"][0]["text"]
-                            else:
-                                err_data = await r.text()
-                                reply = f"⚠️ AI error `{r.status}` — make sure `ANTHROPIC_API_KEY` is set."
-
-                    # Add assistant reply to history
-                    ai_conversations[cid].append({"role": "assistant", "content": reply})
-
-                    # Split long replies (Discord 2000 char limit)
-                    chunks = [reply[i:i+1990] for i in range(0, len(reply), 1990)]
-                    for chunk in chunks:
-                        await msg.reply(chunk, mention_author=False)
-
-                except Exception as ex:
-                    await msg.reply(f"⚠️ Something went wrong: `{ex}`", mention_author=False)
-            return
     # ─────────────────────────────────────────────────────────
 
     await bot.process_commands(msg)
@@ -2204,115 +2131,6 @@ async def automod_strikes(interaction: discord.Interaction, user: discord.Member
     e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
     await interaction.response.send_message(embed=e, ephemeral=True)
 
-
-# ══════════════════════════════════════════════════════════
-#  AI CHAT COMMANDS
-# ══════════════════════════════════════════════════════════
-
-@bot.tree.command(name="ai", description="Ask Crimson Gen AI anything")
-@app_commands.describe(question="Your question or message")
-async def ai_ask(interaction: discord.Interaction, question: str):
-    await interaction.response.defer()
-    cid = interaction.channel.id
-    ai_conversations.setdefault(cid, [])
-    ai_conversations[cid].append({"role": "user", "content": question})
-    if len(ai_conversations[cid]) > AI_MAX_HISTORY:
-        ai_conversations[cid] = ai_conversations[cid][-AI_MAX_HISTORY:]
-
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(
-                ANTHROPIC_API,
-                headers={
-                    "x-api-key": os.getenv("ANTHROPIC_API_KEY", ""),
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": AI_MODEL,
-                    "max_tokens": 1024,
-                    "system": AI_SYSTEM_PROMPT,
-                    "messages": ai_conversations[cid],
-                },
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as r:
-                if r.status == 200:
-                    data = await r.json()
-                    reply = data["content"][0]["text"]
-                else:
-                    reply = f"⚠️ AI error `{r.status}`. Make sure `ANTHROPIC_API_KEY` is set."
-
-        ai_conversations[cid].append({"role": "assistant", "content": reply})
-
-        e = discord.Embed(description=reply[:4000], color=C_CRIMSON, timestamp=datetime.utcnow())
-        e.set_author(name=f"Asked by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
-        ft(e, "Crimson Gen AI", bot.user.display_avatar.url)
-        await interaction.followup.send(embed=e)
-
-    except Exception as ex:
-        ex_str = str(ex)
-        await interaction.followup.send(embed=err("AI Error", f"`{ex_str}`\nMake sure `ANTHROPIC_API_KEY` is set."), ephemeral=True)
-
-@bot.tree.command(name="ai_toggle", description="Enable or disable AI chat in this server")
-@app_commands.checks.has_permissions(administrator=True)
-async def ai_toggle(interaction: discord.Interaction):
-    gid = interaction.guild.id
-    AI_ENABLED[gid] = not AI_ENABLED.get(gid, False)
-    now_on = AI_ENABLED[gid]
-    ch_id  = AI_CHANNEL.get(gid)
-    e = _base("🤖  AI Chat",
-              f"AI responses are now **{'🟢 ENABLED' if now_on else '🔴 DISABLED'}**",
-              C_SUCCESS if now_on else C_ERROR)
-    e.add_field(name="📍 Listening In",
-                value=f"<#{ch_id}> only" if ch_id else "All channels (when @mentioned or message starts with 'Crimson,')",
-                inline=False)
-    e.add_field(name="💡 How to use",
-                value=(
-                    "• **@mention** the bot anywhere\n"
-                    "• Start with `Crimson,` or `Hey Crimson`\n"
-                    "• Use `/ai <question>` for a slash command\n"
-                    "• Set a dedicated channel with `/ai_setchannel`"
-                ), inline=False)
-    ft(e, "Crimson Gen AI", bot.user.display_avatar.url)
-    await interaction.response.send_message(embed=e, ephemeral=True)
-
-@bot.tree.command(name="ai_setchannel", description="Set a dedicated AI chat channel (or clear it)")
-@app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(channel="Channel for AI chat (leave empty to allow everywhere)")
-async def ai_setchannel(interaction: discord.Interaction, channel: discord.TextChannel = None):
-    AI_CHANNEL[interaction.guild.id] = channel.id if channel else None
-    if channel:
-        e = ok("AI Channel Set", f"AI will respond in {channel.mention}.\nIn that channel the bot replies to **every message**.")
-    else:
-        e = ok("AI Channel Cleared", "AI will now respond **everywhere** when @mentioned or called by name.")
-    ft(e, "Crimson Gen AI", bot.user.display_avatar.url)
-    await interaction.response.send_message(embed=e, ephemeral=True)
-
-@bot.tree.command(name="ai_clear", description="Clear the AI conversation history for this channel")
-async def ai_clear(interaction: discord.Interaction):
-    ai_conversations[interaction.channel.id] = []
-    e = ok("Conversation Cleared", "The AI has forgotten this channel's conversation history. Fresh start! 🧹")
-    ft(e, "Crimson Gen AI", bot.user.display_avatar.url)
-    await interaction.response.send_message(embed=e, ephemeral=True)
-
-@bot.tree.command(name="ai_status", description="View the current AI chat configuration")
-async def ai_status(interaction: discord.Interaction):
-    gid    = interaction.guild.id
-    on     = AI_ENABLED.get(gid, False)
-    ch_id  = AI_CHANNEL.get(gid)
-    hist   = len(ai_conversations.get(interaction.channel.id, []))
-    e = _base("🤖  AI Chat Status", color=C_SUCCESS if on else C_ERROR)
-    e.add_field(name="⚡ Status",           value="🟢 Enabled" if on else "🔴 Disabled",          inline=True)
-    e.add_field(name="📍 Channel",          value=f"<#{ch_id}>" if ch_id else "All (when mentioned)", inline=True)
-    e.add_field(name="📝 Model",            value=f"`{AI_MODEL}`",                                  inline=True)
-    e.add_field(name="💬 History (this ch)", value=f"`{hist}` messages stored",                     inline=True)
-    e.add_field(name="🔢 Max History",      value=f"`{AI_MAX_HISTORY}` messages",                  inline=True)
-    e.add_field(name="​",              value="​",                                          inline=True)
-    e.add_field(name="💡 How to trigger",
-                value="@mention bot  •  Start with `Crimson,`  •  Use `/ai`  •  Set a dedicated channel",
-                inline=False)
-    ft(e, "Crimson Gen AI", bot.user.display_avatar.url)
-    await interaction.response.send_message(embed=e)
 
 
 # ══════════════════════════════════════════════════════════
