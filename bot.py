@@ -118,6 +118,16 @@ SCAM_DOMAINS = [
     "discordnitro","giveway","giveaways.com","claim-nitro",
 ]
 
+# NSFW domains — always blocked regardless of any filter setting
+NSFW_DOMAINS = [
+    "pornhub","xvideos","xhamster","redtube","youporn","tube8","xnxx",
+    "xxx","porn","nsfw","onlyfans","fansly","manyvids","4chan","rule34",
+    "gelbooru","danbooru","hentai","nhentai","e-hentai","8muses",
+    "spankbang","beeg","chaturbate","cam4","bongacams","stripchat",
+    "livejasmin","myfreecams","nsfwreddit","brazzers","bangbros",
+    "realitykings","mofos","pornhub","slutty","sexvid","sexhd","fux",
+]
+
 INVITE_RE = re.compile(
     r"(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/|dsc\.gg/|invite\.gg/)\S+", re.I
 )
@@ -360,6 +370,10 @@ async def on_message(msg: discord.Message):
             content = msg.content or ""
             lower   = content.lower()
             blocked = False
+
+            # ── NSFW links (always blocked, no toggle needed) ──
+            if not blocked and any(s in lower for s in NSFW_DOMAINS):
+                await automod_action(msg, "NSFW link not allowed here", cfg); blocked = True
 
             # ── Scam / phishing links (always checked first) ──
             if not blocked and cfg.get("filter_scam"):
