@@ -352,7 +352,7 @@ async def on_ready():
     except Exception as e:
         print(f"❌  Sync failed: {e}")
     await bot.change_presence(
-        activity=discord.Activity(type=discord.ActivityType.watching, name="over the server"),
+        activity=discord.Streaming(name="Crimson Gen", url="https://twitch.tv/crimsongen"),
         status=discord.Status.online
     )
 
