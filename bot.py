@@ -25,6 +25,8 @@ WELCOME_CHANNEL_ID = 1463606144064032952
 BOOST_CHANNEL_ID   = 1469698626283503626
 BOOST_ROLE_ID      = 1471512804535046237
 
+PROTECTED_GUILD_ID = 1463580079819849834  # Insta-ban anyone who adds a bot
+
 CRIMSON_GIF    = "https://cdn.discordapp.com/attachments/1470798856085307423/1471984801266532362/IMG_7053.gif"
 TICKET_BANNER  = "https://cdn.discordapp.com/attachments/1470798856085307423/1479075133586149386/standard_6.gif"
 
@@ -163,7 +165,7 @@ def get_automod(guild_id: int) -> dict:
             "log_channel":      None,
             "filter_profanity": True,
             "filter_invites":   True,
-            "filter_links":     True,    # NOW ON BY DEFAULT
+            "filter_links":     True,
             "filter_caps":      True,
             "filter_spam":      True,
             "filter_mentions":  True,
@@ -482,27 +484,35 @@ async def on_message(msg: discord.Message):
 async def on_member_join(member: discord.Member):
     get_stats(member.guild.id)["joins"] += 1
 
-    # ── Antinuke bot-add check ──
-    if member.bot and an_on(member.guild.id):
+    # ── Bot protection — always on for protected guild ──────
+    if member.bot:
         guild = member.guild
-        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.bot_add):
-            adder = entry.user
-            if adder.bot or an_wl(guild.id, adder.id): break
-            try: await guild.ban(member, reason="[ANTINUKE] Unauthorised bot added", delete_message_days=0)
-            except Exception: pass
-            adder_m = guild.get_member(adder.id)
-            if adder_m: await an_punish(guild, adder_m, "Unauthorised Bot Addition", f"Bot: {member} ({member.id})")
-            log_id = antinuke_log_channels.get(guild.id)
-            if log_id and (ch := guild.get_channel(log_id)):
-                e = _base("🤖  Antinuke — Unauthorised Bot Blocked", color=C_ERROR)
-                e.set_thumbnail(url=member.display_avatar.url)
-                e.add_field(name="🤖 Bot Added",  value=f"{member.mention}\n`{member.id}`", inline=True)
-                e.add_field(name="👤 Added By",   value=f"{adder.mention}\n`{adder.id}`",   inline=True)
-                e.add_field(name="⚙️ Action",     value="Bot banned • Adder banned",         inline=False)
-                ft(e, "Crimson Gen • Antinuke")
-                await ch.send(embed=e)
-            break
-        return
+        always_protected = guild.id == PROTECTED_GUILD_ID
+        if always_protected or an_on(guild.id):
+            async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.bot_add):
+                adder = entry.user
+                # Kick the bot
+                try: await guild.ban(member, reason="Unauthorised bot — not allowed in this server", delete_message_days=0)
+                except Exception: pass
+                # Ban the person who added it (unless whitelisted or already a bot)
+                if not adder.bot and not an_wl(guild.id, adder.id):
+                    adder_m = guild.get_member(adder.id)
+                    if adder_m:
+                        try:
+                            await adder_m.ban(reason="Added an unauthorised bot to the server", delete_message_days=0)
+                        except Exception: pass
+                # Log
+                log_id = antinuke_log_channels.get(guild.id)
+                if log_id and (ch := guild.get_channel(log_id)):
+                    e = _base("🤖  Unauthorised Bot Blocked", color=C_ERROR)
+                    e.set_thumbnail(url=member.display_avatar.url)
+                    e.add_field(name="🤖  Bot",       value=f"{member.mention}\n`{member.id}`", inline=True)
+                    e.add_field(name="👤  Added By",  value=f"{adder.mention}\n`{adder.id}`",   inline=True)
+                    e.add_field(name="⚙️  Action",    value="Bot banned  ·  Adder banned",       inline=False)
+                    ft(e, "Crimson Gen • Protection")
+                    await ch.send(embed=e)
+                break
+            return
 
     if not WELCOME_ENABLED: return
     ch = bot.get_channel(WELCOME_CHANNEL_ID)
