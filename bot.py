@@ -363,6 +363,12 @@ async def on_ready():
 
     try:
         synced = await bot.tree.sync()
+        # Also sync to each guild for instant updates
+        for guild in bot.guilds:
+            try:
+                await bot.tree.sync(guild=guild)
+            except Exception:
+                pass
         print(f"✅  Synced {len(synced)} commands as {bot.user}")
     except Exception as e:
         print(f"❌  Sync failed: {e}")
@@ -1564,13 +1570,11 @@ async def invite(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(administrator=True)
 async def fixcommands(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-    bot.tree.clear_commands(guild=None)
-    bot.tree.clear_commands(guild=interaction.guild)
-    await asyncio.sleep(1)
+    # Sync globally and to this guild — do NOT clear first as it removes commands
     synced       = await bot.tree.sync()
     guild_synced = await bot.tree.sync(guild=interaction.guild)
     e = ok("Commands Resynced", f"Synced **{len(synced)}** global + **{len(guild_synced)}** guild commands.")
-    e.set_footer(text="May take up to 10 minutes to update globally.")
+    e.set_footer(text="Guild commands update instantly. Global may take up to 1 hour.")
     await interaction.followup.send(embed=e, ephemeral=True)
 
 # ══════════════════════════════════════════════════════════
