@@ -2207,7 +2207,38 @@ async def automod_strikes(interaction: discord.Interaction, user: discord.Member
 #  ROLE MANAGEMENT
 # ══════════════════════════════════════════════════════════
 
-@bot.tree.command(name="role", description="Add or remove a role from every member in the server")
+@bot.tree.command(name="role", description="Add or remove a role from a specific member")
+@app_commands.checks.has_permissions(manage_roles=True)
+@app_commands.describe(
+    action="Add or remove the role",
+    member="The member to give/remove the role from",
+    role="The role to give/remove"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="➕ Add",    value="add"),
+    app_commands.Choice(name="➖ Remove", value="remove"),
+])
+async def role_single(interaction: discord.Interaction, action: str, member: discord.Member, role: discord.Role):
+    if role.managed:
+        return await interaction.response.send_message(embed=err("Can't Modify", f"{role.mention} is a managed role."), ephemeral=True)
+    if role >= interaction.guild.me.top_role:
+        return await interaction.response.send_message(embed=err("Role Too High", f"{role.mention} is above my highest role."), ephemeral=True)
+    if role >= interaction.user.top_role and interaction.user.id != interaction.guild.owner_id:
+        return await interaction.response.send_message(embed=err("Role Too High", f"You can't assign {role.mention} — it's above your top role."), ephemeral=True)
+    try:
+        if action == "add":
+            await member.add_roles(role, reason=f"Role added by {interaction.user}")
+            e = ok("Role Added", f"Added {role.mention} to {member.mention}.")
+        else:
+            await member.remove_roles(role, reason=f"Role removed by {interaction.user}")
+            e = ok("Role Removed", f"Removed {role.mention} from {member.mention}.")
+        ft(e, "Crimson Gen", interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=e, ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message(embed=err("No Permission", "I don't have permission to manage that role."), ephemeral=True)
+
+
+@bot.tree.command(name="roleall", description="Add or remove a role from every member in the server")
 @app_commands.checks.has_permissions(administrator=True)
 @app_commands.describe(
     action="Add or remove the role",
@@ -2220,7 +2251,6 @@ async def automod_strikes(interaction: discord.Interaction, user: discord.Member
 async def role_everyone(interaction: discord.Interaction, action: str, role: discord.Role):
     await interaction.response.defer(ephemeral=True)
 
-    # Safety checks
     if role.managed:
         return await interaction.followup.send(
             embed=err("Can't Modify", f"{role.mention} is managed by an integration and can't be assigned manually."),
@@ -2234,11 +2264,10 @@ async def role_everyone(interaction: discord.Interaction, action: str, role: dis
 
     members = [m for m in interaction.guild.members if not m.bot]
     action_word = "Adding" if action == "add" else "Removing"
+    direction   = "to" if action == "add" else "from"
 
-    # Send progress message
-    direction = "to" if action == "add" else "from"
     e = _base(f"⏳  {action_word} Role...",
-              f"{action_word} {role.mention} {direction} **{len(members)}** members.\nThis may take a moment...",
+              f"{action_word} {role.mention} {direction} **{len(members)}** members...",
               C_WARNING)
     ft(e, "Crimson Gen")
     await interaction.followup.send(embed=e, ephemeral=True)
@@ -2246,21 +2275,24 @@ async def role_everyone(interaction: discord.Interaction, action: str, role: dis
     success = 0
     failed  = 0
 
-    for member in members:
+    async def assign(member):
+        nonlocal success, failed
         try:
             if action == "add":
                 if role not in member.roles:
-                    await member.add_roles(role, reason=f"Mass role add by {interaction.user}")
+                    await member.add_roles(role, reason=f"Mass role by {interaction.user}")
             else:
                 if role in member.roles:
-                    await member.remove_roles(role, reason=f"Mass role remove by {interaction.user}")
+                    await member.remove_roles(role, reason=f"Mass role by {interaction.user}")
             success += 1
         except Exception:
             failed += 1
-        # Small delay to avoid rate limits
-        await asyncio.sleep(0.3)
 
-    # Final result
+    # Run all at once in batches of 10 to stay under rate limits but go fast
+    batch_size = 10
+    for i in range(0, len(members), batch_size):
+        await asyncio.gather(*[assign(m) for m in members[i:i+batch_size]])
+
     action_done = "Added" if action == "add" else "Removed"
     direction2  = "to" if action == "add" else "from"
     fail_note   = f"\n⚠️ Failed for **{failed}** member(s)." if failed else ""
