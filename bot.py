@@ -93,12 +93,6 @@ boost_channel_id         = BOOST_CHANNEL_ID
 reaction_role_message_id = None
 bot_start_time  = None
 
-# ── Invite Tracker ──
-invite_cache        = {}  # {guild_id: {code: discord.Invite}}
-invite_data         = {}  # {guild_id: {inviter_id: {"regular":int,"left":int,"fake":int,"bonus":int}}}
-invite_log_channels = {}  # {guild_id: channel_id}
-invite_join_map     = {}  # {guild_id: {member_id: {"code":str,"inviter_id":int,"joined_at":str}}}
-invite_rewards      = {}  # {guild_id: {invite_count: role_id}}
 
 
 # ── Antinuke ──
@@ -353,13 +347,6 @@ async def on_ready():
     bot.add_view(ClosedTicketView())
     bot.add_view(StaffTicketInfoView())
 
-    # Cache all guild invites on startup
-    for guild in bot.guilds:
-        try:
-            invites = await guild.invites()
-            invite_cache[guild.id] = {inv.code: inv for inv in invites}
-        except Exception:
-            invite_cache[guild.id] = {}
 
     try:
         synced = await bot.tree.sync()
@@ -512,24 +499,30 @@ async def on_member_join(member: discord.Member):
         if always_protected or an_on(guild.id):
             async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.bot_add):
                 adder = entry.user
-                # Kick the bot
+                # Never ban the server owner or admins
+                adder_m = guild.get_member(adder.id)
+                is_immune = (
+                    adder.bot or
+                    an_wl(guild.id, adder.id) or
+                    adder.id == guild.owner_id or
+                    (adder_m and adder_m.guild_permissions.administrator)
+                )
+                # Ban the bot
                 try: await guild.ban(member, reason="Unauthorised bot — not allowed in this server", delete_message_days=0)
                 except Exception: pass
-                # Ban the person who added it (unless whitelisted or already a bot)
-                if not adder.bot and not an_wl(guild.id, adder.id):
-                    adder_m = guild.get_member(adder.id)
-                    if adder_m:
-                        try:
-                            await adder_m.ban(reason="Added an unauthorised bot to the server", delete_message_days=0)
-                        except Exception: pass
+                # Ban the adder only if not immune
+                if not is_immune and adder_m:
+                    try:
+                        await adder_m.ban(reason="Added an unauthorised bot to the server", delete_message_days=0)
+                    except Exception: pass
                 # Log
                 log_id = antinuke_log_channels.get(guild.id)
                 if log_id and (ch := guild.get_channel(log_id)):
                     e = _base("🤖  Unauthorised Bot Blocked", color=C_ERROR)
                     e.set_thumbnail(url=member.display_avatar.url)
-                    e.add_field(name="🤖  Bot",       value=f"{member.mention}\n`{member.id}`", inline=True)
-                    e.add_field(name="👤  Added By",  value=f"{adder.mention}\n`{adder.id}`",   inline=True)
-                    e.add_field(name="⚙️  Action",    value="Bot banned  ·  Adder banned",       inline=False)
+                    e.add_field(name="🤖  Bot",       value=f"{member.mention}\n`{member.id}`",                      inline=True)
+                    e.add_field(name="👤  Added By",  value=f"{adder.mention}\n`{adder.id}`",                         inline=True)
+                    e.add_field(name="⚙️  Action",    value=f"Bot banned  ·  {'Adder immune' if is_immune else 'Adder banned'}", inline=False)
                     ft(e, "Crimson Gen • Protection")
                     await ch.send(embed=e)
                 break
@@ -538,126 +531,34 @@ async def on_member_join(member: discord.Member):
     if not WELCOME_ENABLED: return
     ch = bot.get_channel(WELCOME_CHANNEL_ID)
     if not ch: return
-
-    # ── Determine who invited this member ────────────────────
-    inviter      = None
-    invite_code  = None
-    try:
-        new_invites = await member.guild.invites()
-        old_invites = invite_cache.get(member.guild.id, {})
-        for inv in new_invites:
-            old = old_invites.get(inv.code)
-            if old is None or inv.uses > old.uses:
-                invite_code = inv.code
-                inviter     = inv.inviter
-                # Update data
-                gid = member.guild.id
-                invite_data.setdefault(gid, {})
-                if inviter:
-                    uid = inviter.id
-                    invite_data[gid].setdefault(uid, {"regular": 0, "left": 0, "fake": 0, "bonus": 0})
-                    # Fake invite = account created less than 7 days ago
-                    age_days = (datetime.utcnow() - member.created_at.replace(tzinfo=None)).days
-                    if age_days < 7:
-                        invite_data[gid][uid]["fake"] += 1
-                    else:
-                        invite_data[gid][uid]["regular"] += 1
-                    # Save join map
-                    invite_join_map.setdefault(gid, {})[member.id] = {
-                        "code":       invite_code,
-                        "inviter_id": uid,
-                        "joined_at":  datetime.utcnow().isoformat(),
-                    }
-                    # Check invite rewards
-                    total = _invite_total(gid, uid)
-                    rewards = invite_rewards.get(gid, {})
-                    for req_count, role_id in sorted(rewards.items()):
-                        if total >= req_count:
-                            role = member.guild.get_role(role_id)
-                            inviter_m = member.guild.get_member(uid)
-                            if role and inviter_m and role not in inviter_m.roles:
-                                try: await inviter_m.add_roles(role, reason=f"Invite reward: {req_count} invites")
-                                except Exception: pass
-                break
-        # Refresh cache
-        invite_cache[member.guild.id] = {inv.code: inv for inv in new_invites}
-    except Exception:
-        pass
-
-    # ── Build welcome message (plain text like Invite Tracker) ─
-    if inviter:
-        total_inv = _invite_total(member.guild.id, inviter.id)
-        welcome_msg = f"{member.mention} has been invited by {inviter.mention} and has now {total_inv} invite{'s' if total_inv != 1 else ''}."
-    elif invite_code and member.guild.vanity_url_code and invite_code == member.guild.vanity_url_code:
-        welcome_msg = f"{member.name} joined using a vanity invite."
-    else:
-        welcome_msg = f"{member.name} joined the server."
-
-    if WELCOME_ENABLED:
-        ch = bot.get_channel(WELCOME_CHANNEL_ID)
-        if ch:
-            await ch.send(welcome_msg)
-
-    # ── Invite log ───────────────────────────────────────────
-    log_id = invite_log_channels.get(member.guild.id)
-    if log_id and (log_ch := bot.get_channel(log_id)):
-        await log_ch.send(welcome_msg)
+    e = _base("🎉  Welcome to the Server!", color=C_SUCCESS)
+    e.description = (
+        f"Hey {member.mention}, welcome to **{member.guild.name}**!\n\n"
+        f"📅 **Account Created:** <t:{int(member.created_at.timestamp())}:R>\n"
+        f"👥 **You are member #{member.guild.member_count}**\n\n"
+        f"📚 **Get Started**\n"
+        f"› Read the rules  ›  Grab your roles  ›  Say hello!"
+    )
+    e.set_thumbnail(url=member.display_avatar.url)
+    e.set_image(url=CRIMSON_GIF)
+    ft(e, f"{member.guild.name} • Welcome", member.guild.icon.url if member.guild.icon else None)
+    await ch.send(content=member.mention, embed=e)
 
 @bot.event
 async def on_member_remove(member: discord.Member):
     get_stats(member.guild.id)["leaves"] += 1
-
-    # ── Track left invites ───────────────────────────────────
-    gid     = member.guild.id
-    join_info = invite_join_map.get(gid, {}).pop(member.id, None)
-    if join_info and join_info.get("inviter_id"):
-        uid = join_info["inviter_id"]
-        invite_data.setdefault(gid, {}).setdefault(uid, {"regular": 0, "left": 0, "fake": 0, "bonus": 0})
-        # Only count as left if it was a regular invite (not fake)
-        if invite_data[gid][uid]["regular"] > 0:
-            invite_data[gid][uid]["regular"] -= 1
-        invite_data[gid][uid]["left"] += 1
-
-        log_id = invite_log_channels.get(gid)
-        if log_id and (log_ch := bot.get_channel(log_id)):
-            inviter_m = member.guild.get_member(uid)
-            if inviter_m:
-                leave_msg = f"{member.name} left the server. They were invited by {inviter_m.mention}."
-            else:
-                leave_msg = f"{member.name} left the server. They were invited by a user who is no longer in the server."
-            await log_ch.send(leave_msg)
-
     if not LEAVE_ENABLED: return
     ch = bot.get_channel(WELCOME_CHANNEL_ID)
     if not ch: return
-
-    # Build leave message
-    join_info_check = invite_join_map.get(member.guild.id, {}).get(member.id)
-    if join_info_check and join_info_check.get("inviter_id"):
-        inviter_m = member.guild.get_member(join_info_check["inviter_id"])
-        if inviter_m:
-            leave_msg = f"{member.name} left the server. They were invited by {inviter_m.mention}."
-        else:
-            leave_msg = f"{member.name} left the server. They joined using a vanity invite."
-    elif member.guild.vanity_url_code:
-        leave_msg = f"{member.name} left the server. They joined using the vanity invite."
-    else:
-        leave_msg = f"{member.name} left the server. I can not figure out how they joined."
-
-    await ch.send(leave_msg)
-
-def _invite_total(guild_id: int, user_id: int) -> int:
-    """Effective invites = regular + bonus - fake (left already deducted from regular)."""
-    d = invite_data.get(guild_id, {}).get(user_id, {"regular": 0, "left": 0, "fake": 0, "bonus": 0})
-    return max(0, d["regular"] + d["bonus"] - d["fake"])
-
-@bot.event
-async def on_invite_create(invite: discord.Invite):
-    invite_cache.setdefault(invite.guild.id, {})[invite.code] = invite
-
-@bot.event
-async def on_invite_delete(invite: discord.Invite):
-    invite_cache.get(invite.guild.id, {}).pop(invite.code, None)
+    e = _base("👋  Member Left", color=C_ERROR)
+    e.description = (
+        f"**{member.name}** has left the server.\n\n"
+        f"📥 **Joined:** <t:{int(member.joined_at.timestamp())}:R>\n"
+        f"👥 **Members now:** {member.guild.member_count}"
+    )
+    e.set_thumbnail(url=member.display_avatar.url)
+    ft(e, f"{member.guild.name} • Goodbye", member.guild.icon.url if member.guild.icon else None)
+    await ch.send(embed=e)
 
 # ══════════════════════════════════════════════════════════
 #  AFK
@@ -2238,37 +2139,37 @@ async def automod_whitelist(interaction: discord.Interaction,
         e.description = "## ❌  Missing Target\n> Please provide a role or channel to whitelist."
         return await interaction.response.send_message(embed=e, ephemeral=True)
 
-    cfg    = get_automod(interaction.guild.id)
-    lines  = []
+    cfg   = get_automod(interaction.guild.id)
+    lines = []
 
     if role:
-        lst = cfg["whitelist_roles"]
         if action == "add":
-            if role.id not in lst: lst.append(role.id)
+            if role.id not in cfg["whitelist_roles"]:
+                cfg["whitelist_roles"].append(role.id)
             lines.append(f"✅ {role.mention} added to role whitelist")
         else:
-            if role.id in lst: lst.remove(role.id)
-            lines.append(f"❌ {role.mention} removed from role whitelist")
+            if role.id in cfg["whitelist_roles"]:
+                cfg["whitelist_roles"].remove(role.id)
+            lines.append(f"✅ {role.mention} removed from role whitelist")
 
     if channel:
-        lst = cfg["whitelist_channels"]
         if action == "add":
-            if channel.id not in lst: lst.append(channel.id)
+            if channel.id not in cfg["whitelist_channels"]:
+                cfg["whitelist_channels"].append(channel.id)
             lines.append(f"✅ {channel.mention} added to channel whitelist")
         else:
-            if channel.id in lst: lst.remove(channel.id)
-            lines.append(f"❌ {channel.mention} removed from channel whitelist")
+            if channel.id in cfg["whitelist_channels"]:
+                cfg["whitelist_channels"].remove(channel.id)
+            lines.append(f"✅ {channel.mention} removed from channel whitelist")
+
+    # Show current whitelist state
+    wl_roles = " ".join(f"<@&{r}>" for r in cfg["whitelist_roles"]) or "`None`"
+    wl_chs   = " ".join(f"<#{c}>" for c in cfg["whitelist_channels"]) or "`None`"
 
     e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
-    e.description = f"## ✅  Whitelist Updated\n> " + "\n> ".join(lines)
-    e.add_field(
-        name="📊  Current Whitelist",
-        value=(
-            f"🎭 **{len(cfg['whitelist_roles'])}** role(s)  ·  "
-            f"💬 **{len(cfg['whitelist_channels'])}** channel(s)"
-        ),
-        inline=False
-    )
+    e.description = "## ✅  Whitelist Updated\n> " + "\n> ".join(lines)
+    e.add_field(name="🎭  Whitelisted Roles",    value=wl_roles[:1024], inline=False)
+    e.add_field(name="💬  Whitelisted Channels", value=wl_chs[:1024],   inline=False)
     e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
     await interaction.response.send_message(embed=e, ephemeral=True)
 
@@ -2310,209 +2211,6 @@ async def automod_strikes(interaction: discord.Interaction, user: discord.Member
     e.set_footer(text="Crimson Gen • AutoMod", icon_url=interaction.guild.me.display_avatar.url)
     await interaction.response.send_message(embed=e, ephemeral=True)
 
-
-
-# ══════════════════════════════════════════════════════════
-#  INVITE TRACKER
-# ══════════════════════════════════════════════════════════
-
-@bot.tree.command(name="invites", description="Check how many invites a user has")
-@app_commands.describe(user="User to check (defaults to yourself)")
-async def invites(interaction: discord.Interaction, user: discord.Member = None):
-    target = user or interaction.user
-    gid    = interaction.guild.id
-    uid    = target.id
-    d      = invite_data.get(gid, {}).get(uid, {"regular": 0, "left": 0, "fake": 0, "bonus": 0})
-    total  = _invite_total(gid, uid)
-
-    e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-    e.set_author(name=f"{target.display_name}'s Invites", icon_url=target.display_avatar.url)
-    e.set_thumbnail(url=target.display_avatar.url)
-    e.description = f"### 📨  {total} Total Invites\n\u200b"
-    e.add_field(name="✅  Regular",  value=f"`{d['regular']}`", inline=True)
-    e.add_field(name="🎁  Bonus",    value=f"`{d['bonus']}`",   inline=True)
-    e.add_field(name="👋  Left",     value=f"`{d['left']}`",    inline=True)
-    e.add_field(name="⚠️  Fake",     value=f"`{d['fake']}`",    inline=True)
-    ft(e, "Crimson Gen • Invite Tracker", interaction.guild.icon.url if interaction.guild.icon else None)
-    await interaction.response.send_message(embed=e)
-
-
-@bot.tree.command(name="invitetop", description="View the invite leaderboard")
-async def invitetop(interaction: discord.Interaction):
-    gid     = interaction.guild.id
-    data    = invite_data.get(gid, {})
-    if not data:
-        return await interaction.response.send_message(
-            embed=_base("📨  Invite Leaderboard", "No invite data yet.", C_CRIMSON), ephemeral=True
-        )
-
-    ranked = sorted(
-        [(uid, _invite_total(gid, uid)) for uid in data],
-        key=lambda x: x[1], reverse=True
-    )[:10]
-
-    medals = ["🥇", "🥈", "🥉"]
-    rows   = []
-    for i, (uid, total) in enumerate(ranked):
-        d      = data[uid]
-        medal  = medals[i] if i < 3 else f"`{i+1}.`"
-        member = interaction.guild.get_member(uid)
-        name   = member.display_name if member else f"Unknown ({uid})"
-        rows.append(f"{medal}  **{name}** — **{total}** invites  ·  {d['regular']} reg  ·  {d['left']} left  ·  {d['fake']} fake")
-
-    e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-    e.description = "### 🏆  Invite Leaderboard\n\n" + "\n".join(rows)
-    ft(e, "Crimson Gen • Invite Tracker", interaction.guild.icon.url if interaction.guild.icon else None)
-    await interaction.response.send_message(embed=e)
-
-
-@bot.tree.command(name="inviteinfo", description="Get info about a specific invite code")
-@app_commands.describe(code="The invite code to look up")
-async def inviteinfo(interaction: discord.Interaction, code: str):
-    code = code.strip().replace("https://discord.gg/", "").replace("discord.gg/", "")
-    try:
-        invite = await bot.fetch_invite(code)
-    except Exception:
-        return await interaction.response.send_message(
-            embed=err("Not Found", f"Couldn't find invite `{code}`."), ephemeral=True
-        )
-    e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-    e.description = f"### 🔗  Invite — `{code}`\n\u200b"
-    e.add_field(name="📨  Inviter",  value=invite.inviter.mention if invite.inviter else "Unknown",     inline=True)
-    e.add_field(name="📊  Uses",     value=f"`{invite.uses}`" if invite.uses is not None else "`?`",    inline=True)
-    e.add_field(name="♾️  Max Uses",  value=f"`{invite.max_uses or '∞'}`",                              inline=True)
-    e.add_field(name="📍  Channel",  value=invite.channel.mention if invite.channel else "?",           inline=True)
-    expires = f"<t:{int(invite.expires_at.timestamp())}:R>" if invite.expires_at else "`Never`"
-    e.add_field(name="⏰  Expires",  value=expires,                                                     inline=True)
-    e.add_field(name="🌐  URL",      value=f"[discord.gg/{code}](https://discord.gg/{code})",           inline=True)
-    ft(e, "Crimson Gen • Invite Tracker", interaction.guild.icon.url if interaction.guild.icon else None)
-    await interaction.response.send_message(embed=e)
-
-
-@bot.tree.command(name="listinvites", description="List all active invites in the server")
-@app_commands.checks.has_permissions(manage_guild=True)
-async def listinvites(interaction: discord.Interaction):
-    await interaction.response.defer()
-    try:
-        invites = await interaction.guild.invites()
-    except Exception:
-        return await interaction.followup.send(embed=err("Failed", "Couldn't fetch invites."), ephemeral=True)
-
-    if not invites:
-        return await interaction.followup.send(embed=_base("🔗  Invites", "No active invites.", C_CRIMSON))
-
-    rows = []
-    for inv in sorted(invites, key=lambda x: x.uses or 0, reverse=True):
-        name  = inv.inviter.display_name if inv.inviter else "?"
-        uses  = inv.uses or 0
-        limit = inv.max_uses or "∞"
-        rows.append(f"[`{inv.code}`](https://discord.gg/{inv.code})  **{name}**  ·  {uses}/{limit} uses  ·  #{inv.channel.name if inv.channel else '?'}")
-
-    e = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-    e.description = f"### 🔗  Active Invites ({len(invites)})\n\n" + "\n".join(rows[:25])
-    if len(invites) > 25:
-        e.description += f"\n*...and {len(invites)-25} more*"
-    ft(e, "Crimson Gen • Invite Tracker", interaction.guild.icon.url if interaction.guild.icon else None)
-    await interaction.followup.send(embed=e)
-
-
-@bot.tree.command(name="inviteset_log", description="Set the channel for invite join/leave logs")
-@app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(channel="Channel to send invite logs to (leave empty to disable)")
-async def inviteset_log(interaction: discord.Interaction, channel: discord.TextChannel = None):
-    if channel:
-        invite_log_channels[interaction.guild.id] = channel.id
-        e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
-        e.description = f"✅  Invite logs will be sent to {channel.mention}."
-    else:
-        invite_log_channels.pop(interaction.guild.id, None)
-        e = discord.Embed(color=C_WARNING, timestamp=datetime.utcnow())
-        e.description = "✅  Invite log channel cleared."
-    ft(e, "Crimson Gen • Invite Tracker")
-    await interaction.response.send_message(embed=e, ephemeral=True)
-
-
-@bot.tree.command(name="inviteadd", description="Manually add bonus invites to a user")
-@app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(user="User to give bonus invites to", amount="Number of invites to add")
-async def inviteadd(interaction: discord.Interaction, user: discord.Member, amount: int):
-    gid = interaction.guild.id
-    invite_data.setdefault(gid, {}).setdefault(user.id, {"regular": 0, "left": 0, "fake": 0, "bonus": 0})
-    invite_data[gid][user.id]["bonus"] += amount
-    total = _invite_total(gid, user.id)
-    e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
-    e.description = f"✅  Added **{amount}** bonus invite(s) to {user.mention}.\nThey now have **{total}** total invites."
-    ft(e, "Crimson Gen • Invite Tracker")
-    await interaction.response.send_message(embed=e, ephemeral=True)
-
-
-@bot.tree.command(name="inviteremove", description="Manually remove invites from a user")
-@app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(user="User to remove invites from", amount="Number of invites to remove")
-async def inviteremove(interaction: discord.Interaction, user: discord.Member, amount: int):
-    gid = interaction.guild.id
-    invite_data.setdefault(gid, {}).setdefault(user.id, {"regular": 0, "left": 0, "fake": 0, "bonus": 0})
-    invite_data[gid][user.id]["bonus"] -= amount
-    total = _invite_total(gid, user.id)
-    e = discord.Embed(color=C_WARNING, timestamp=datetime.utcnow())
-    e.description = f"✅  Removed **{amount}** invite(s) from {user.mention}.\nThey now have **{total}** total invites."
-    ft(e, "Crimson Gen • Invite Tracker")
-    await interaction.response.send_message(embed=e, ephemeral=True)
-
-
-@bot.tree.command(name="invitereset", description="Reset invite data for a user or the whole server")
-@app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(user="User to reset (leave empty to reset ALL)")
-async def invitereset(interaction: discord.Interaction, user: discord.Member = None):
-    gid = interaction.guild.id
-    if user:
-        invite_data.get(gid, {}).pop(user.id, None)
-        invite_join_map.get(gid, {})
-        e = discord.Embed(color=C_SUCCESS, description=f"✅  Reset invite data for {user.mention}.")
-    else:
-        invite_data[gid] = {}
-        invite_join_map[gid] = {}
-        e = discord.Embed(color=C_SUCCESS, description="✅  Reset **all** invite data for this server.")
-    ft(e, "Crimson Gen • Invite Tracker")
-    await interaction.response.send_message(embed=e, ephemeral=True)
-
-
-@bot.tree.command(name="invitereward", description="Set a role reward for reaching an invite milestone")
-@app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(
-    invites="Number of invites needed",
-    role="Role to award (leave empty to remove reward for this milestone)"
-)
-async def invitereward(interaction: discord.Interaction, invites: int, role: discord.Role = None):
-    gid = interaction.guild.id
-    invite_rewards.setdefault(gid, {})
-    if role:
-        invite_rewards[gid][invites] = role.id
-        e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
-        e.description = f"✅  Users who reach **{invites}** invites will receive {role.mention}."
-    else:
-        invite_rewards[gid].pop(invites, None)
-        e = discord.Embed(color=C_WARNING, timestamp=datetime.utcnow())
-        e.description = f"✅  Removed invite reward for **{invites}** invites."
-    ft(e, "Crimson Gen • Invite Tracker")
-    await interaction.response.send_message(embed=e, ephemeral=True)
-
-
-@bot.tree.command(name="inviterewards", description="View all configured invite rewards")
-async def inviterewards(interaction: discord.Interaction):
-    gid     = interaction.guild.id
-    rewards = invite_rewards.get(gid, {})
-    e       = discord.Embed(color=C_CRIMSON, timestamp=datetime.utcnow())
-    if not rewards:
-        e.description = "### 🎁  Invite Rewards\n\nNo rewards configured.\nUse `/invitereward` to set one."
-    else:
-        rows = []
-        for count, role_id in sorted(rewards.items()):
-            role = interaction.guild.get_role(role_id)
-            rows.append(f"**{count}** invites → {role.mention if role else f'`{role_id}` (deleted)'}")
-        e.description = "### 🎁  Invite Rewards\n\n" + "\n".join(rows)
-    ft(e, "Crimson Gen • Invite Tracker", interaction.guild.icon.url if interaction.guild.icon else None)
-    await interaction.response.send_message(embed=e)
 
 
 # ══════════════════════════════════════════════════════════
