@@ -1138,22 +1138,98 @@ async def untimeout(interaction: discord.Interaction, user: discord.Member):
     ft(e, f"Removed by {interaction.user.name}", interaction.user.display_avatar.url)
     await interaction.followup.send(embed=e)
 
-@bot.tree.command(name="purge", description="Bulk delete messages in the current channel")
+@bot.tree.command(name="purge", description="Bulk delete messages (1–1000)")
 @app_commands.checks.has_permissions(manage_messages=True)
-@app_commands.describe(amount="Number of messages to delete (1–100)")
-async def purge(interaction: discord.Interaction, amount: int):
+@app_commands.describe(
+    amount="Number of messages to delete (1–1000)",
+    user="Only delete messages from this user (optional)",
+    contains="Only delete messages containing this text (optional)",
+    bots_only="Only delete messages from bots"
+)
+async def purge(
+    interaction: discord.Interaction,
+    amount: int,
+    user: discord.Member = None,
+    contains: str = None,
+    bots_only: bool = False
+):
     await interaction.response.defer(ephemeral=True)
-    if not 1 <= amount <= 100: return await interaction.followup.send(embed=err("Invalid Amount", "Choose between 1 and 100."), ephemeral=True)
-    deleted = await interaction.channel.purge(limit=amount)
-    await interaction.followup.send(embed=ok("Purged", f"Deleted **{len(deleted)}** message(s)."), ephemeral=True)
 
-@bot.tree.command(name="clear", description="Alias for /purge")
-@app_commands.checks.has_permissions(manage_messages=True)
-@app_commands.describe(amount="Number of messages to delete")
-async def clear(interaction: discord.Interaction, amount: int):
-    await interaction.response.defer(ephemeral=True)
-    deleted = await interaction.channel.purge(limit=amount)
-    await interaction.followup.send(embed=ok("Cleared", f"Deleted **{len(deleted)}** message(s)."), ephemeral=True)
+    if not 1 <= amount <= 1000:
+        return await interaction.followup.send(
+            embed=err("Invalid Amount", "Choose between **1** and **1000**."), ephemeral=True
+        )
+
+    def check(m: discord.Message) -> bool:
+        if user     and m.author != user:                          return False
+        if bots_only and not m.author.bot:                        return False
+        if contains and contains.lower() not in m.content.lower(): return False
+        return True
+
+    try:
+        # Fetch up to amount*2 messages to account for filtered ones, cap at 1000
+        fetch_limit = min(amount * 2 if (user or contains or bots_only) else amount, 1000)
+        now         = datetime.utcnow()
+        messages    = []
+
+        async for msg in interaction.channel.history(limit=fetch_limit, oldest_first=False):
+            if check(msg):
+                messages.append(msg)
+            if len(messages) >= amount:
+                break
+
+        if not messages:
+            return await interaction.followup.send(
+                embed=warn("Nothing to Delete", "No matching messages found."), ephemeral=True
+            )
+
+        # Split into bulk-deletable (< 14 days) and old
+        bulk = [m for m in messages if (now - m.created_at.replace(tzinfo=None)).days < 14]
+        old  = [m for m in messages if (now - m.created_at.replace(tzinfo=None)).days >= 14]
+
+        total_deleted = 0
+
+        # Bulk delete in batches of 100 simultaneously — maximum speed
+        for i in range(0, len(bulk), 100):
+            batch = bulk[i:i+100]
+            try:
+                if len(batch) == 1:
+                    await batch[0].delete()
+                else:
+                    await interaction.channel.delete_messages(batch)
+                total_deleted += len(batch)
+            except Exception:
+                pass
+
+        # Old messages deleted concurrently in groups of 5
+        for i in range(0, len(old), 5):
+            batch = old[i:i+5]
+            results = await asyncio.gather(*[m.delete() for m in batch], return_exceptions=True)
+            total_deleted += sum(1 for r in results if not isinstance(r, Exception))
+
+    except discord.Forbidden:
+        return await interaction.followup.send(
+            embed=err("Missing Permissions", "I don't have permission to delete messages here."), ephemeral=True
+        )
+    except Exception as ex:
+        return await interaction.followup.send(
+            embed=err("Error", f"Something went wrong: `{ex}`"), ephemeral=True
+        )
+
+    filters = []
+    if user:      filters.append(f"from {user.mention}")
+    if bots_only: filters.append("bots only")
+    if contains:  filters.append(f"containing `{contains}`")
+    filter_str = "  ·  ".join(filters) if filters else "all messages"
+
+    e = discord.Embed(color=C_SUCCESS, timestamp=datetime.utcnow())
+    e.description = (
+        f"## 🗑️  Purge Complete\n"
+        f"> Deleted **{total_deleted}** message(s)\n"
+        f"> Filter: {filter_str}"
+    )
+    ft(e, f"Purged by {interaction.user.name}", interaction.user.display_avatar.url)
+    await interaction.followup.send(embed=e, ephemeral=True)
 
 @bot.tree.command(name="slowmode", description="Set slowmode on this channel")
 @app_commands.checks.has_permissions(manage_channels=True)
