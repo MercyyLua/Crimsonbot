@@ -2396,6 +2396,59 @@ async def role_everyone(interaction: discord.Interaction, action: str, role: dis
 # ══════════════════════════════════════════════════════════
 #  RUN
 # ══════════════════════════════════════════════════════════
+@bot.tree.command(name="roleperms", description="Edit a role's permissions")
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(
+    role="Role to edit",
+    permission="Permission to toggle",
+    enabled="Turn it on or off"
+)
+@app_commands.choices(permission=[
+    app_commands.Choice(name="👑 Administrator",        value="administrator"),
+    app_commands.Choice(name="🔨 Ban Members",          value="ban_members"),
+    app_commands.Choice(name="👢 Kick Members",         value="kick_members"),
+    app_commands.Choice(name="⚙️ Manage Server",        value="manage_guild"),
+    app_commands.Choice(name="🎭 Manage Roles",         value="manage_roles"),
+    app_commands.Choice(name="💬 Manage Channels",      value="manage_channels"),
+    app_commands.Choice(name="📌 Manage Messages",      value="manage_messages"),
+    app_commands.Choice(name="⏱️ Manage Threads",       value="manage_threads"),
+    app_commands.Choice(name="😎 Manage Nicknames",     value="manage_nicknames"),
+    app_commands.Choice(name="😂 Manage Expressions",   value="manage_expressions"),
+    app_commands.Choice(name="🔇 Mute Members",         value="mute_members"),
+    app_commands.Choice(name="🔕 Deafen Members",       value="deafen_members"),
+    app_commands.Choice(name="📢 Mention Everyone",      value="mention_everyone"),
+    app_commands.Choice(name="🔗 Embed Links",           value="embed_links"),
+    app_commands.Choice(name="📁 Attach Files",          value="attach_files"),
+    app_commands.Choice(name="📜 View Audit Log",        value="view_audit_log"),
+])
+async def roleperms(interaction: discord.Interaction, role: discord.Role, permission: str, enabled: bool):
+    await interaction.response.defer(ephemeral=True)
+
+    # Only owner ID can grant administrator
+    if permission == "administrator" and interaction.user.id != BOT_OWNER_ID and interaction.user.id != interaction.guild.owner_id:
+        return await interaction.followup.send(
+            embed=err("Restricted", "Only the server owner can grant Administrator permission."), ephemeral=True
+        )
+
+    try:
+        current_perms = role.permissions
+        new_perms     = discord.Permissions(**{**dict(iter(current_perms)), permission: enabled})
+        await role.edit(permissions=new_perms, reason=f"Permission edited by {interaction.user}")
+        e = discord.Embed(color=C_SUCCESS if enabled else C_WARNING, timestamp=datetime.utcnow())
+        e.description = (
+            f"## {'✅' if enabled else '❌'}  Permission {'Enabled' if enabled else 'Disabled'}\n"
+            f"> **Role:** {role.mention}\n"
+            f"> **Permission:** `{permission}`\n"
+            f"> **Status:** {'🟢 ON' if enabled else '🔴 OFF'}"
+        )
+        ft(e, f"Edited by {interaction.user.name}", interaction.user.display_avatar.url)
+        await interaction.followup.send(embed=e, ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send(
+            embed=err("Failed", "I don't have permission to edit that role. Make sure my role is above it."), ephemeral=True
+        )
+    except Exception as ex:
+        await interaction.followup.send(embed=err("Error", str(ex)), ephemeral=True)
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.MissingPermissions):
