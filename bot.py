@@ -486,6 +486,41 @@ async def on_message(msg: discord.Message):
 
     # ─────────────────────────────────────────────────────────
 
+    # ── Anti-Everyone (antieveryone.py) ──────────────────────
+    if msg.guild and msg.mention_everyone and an_on(msg.guild.id):
+        if not _an_immune(msg.guild, msg.author.id) and _an_can_act(msg.guild.id, "mention_everyone"):
+            # Timeout 1 hour
+            retries = 3
+            while retries > 0:
+                try:
+                    await msg.author.edit(
+                        timed_out_until=discord.utils.utcnow() + timedelta(seconds=3600),
+                        reason="Mentioned Everyone/Here | Unwhitelisted User"
+                    )
+                    break
+                except discord.Forbidden: break
+                except discord.HTTPException as e:
+                    if e.status == 429:
+                        await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+                    else: break
+                except Exception: break
+            # Delete @everyone messages in channel
+            retries = 3
+            while retries > 0:
+                try:
+                    async for m in msg.channel.history(limit=100):
+                        if m.mention_everyone:
+                            await m.delete()
+                            await asyncio.sleep(3)
+                    break
+                except discord.Forbidden: break
+                except discord.HTTPException as e:
+                    if e.status == 429:
+                        await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+                    else: break
+                except Exception: break
+            await _an_log(msg.guild, "Anti-Everyone Mention", msg.author, f"#{msg.channel.name}", "User timed out 1hr · Messages deleted")
+
     await bot.process_commands(msg)
 
 # ══════════════════════════════════════════════════════════
@@ -550,6 +585,38 @@ async def on_member_join(member: discord.Member):
 @bot.event
 async def on_member_remove(member: discord.Member):
     get_stats(member.guild.id)["leaves"] += 1
+    guild = member.guild
+
+    # ── Anti-Kick (antikick.py) ───────────────────────────
+    if an_on(guild.id) and _an_can_act(guild.id, "kick", max_requests=6):
+        kick_entry = await _an_fetch(guild, discord.AuditLogAction.kick, member.id)
+        if kick_entry:
+            executor = kick_entry.user
+            if not _an_immune(guild, executor.id):
+                retries = 3
+                while retries > 0:
+                    try:
+                        await guild.ban(executor, reason="Member Kick | Unwhitelisted User", delete_message_days=0)
+                        break
+                    except discord.Forbidden: break
+                    except discord.HTTPException as e:
+                        if e.status == 429:
+                            await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+                        else: break
+                    except Exception: break
+                await _an_log(guild, "Anti-Kick", executor, f"Kicked: {member}", "Executor banned")
+                await asyncio.sleep(2)
+
+    # ── Anti-Prune (antiprune.py) ─────────────────────────
+    if an_on(guild.id):
+        prune_entry = await _an_fetch(guild, discord.AuditLogAction.member_prune)
+        if prune_entry:
+            executor = prune_entry.user
+            if not _an_immune(guild, executor.id):
+                await _an_ban(guild, executor, "Member Prune | Unwhitelisted User")
+                await _an_log(guild, "Anti-Prune", executor, f"Pruned: {member}", "Executor banned")
+
+    # ── Leave message ─────────────────────────────────────
     if not LEAVE_ENABLED: return
     ch = bot.get_channel(WELCOME_CHANNEL_ID)
     if not ch: return
@@ -557,10 +624,10 @@ async def on_member_remove(member: discord.Member):
     e.description = (
         f"**{member.name}** has left the server.\n\n"
         f"📥 **Joined:** <t:{int(member.joined_at.timestamp())}:R>\n"
-        f"👥 **Members now:** {member.guild.member_count}"
+        f"👥 **Members now:** {guild.member_count}"
     )
     e.set_thumbnail(url=member.display_avatar.url)
-    ft(e, f"{member.guild.name} • Goodbye", member.guild.icon.url if member.guild.icon else None)
+    ft(e, f"{guild.name} • Goodbye", guild.icon.url if guild.icon else None)
     await ch.send(embed=e)
 
 # ══════════════════════════════════════════════════════════
@@ -1852,71 +1919,397 @@ async def getvouchchannel(interaction: discord.Interaction):
 # ══════════════════════════════════════════════════════════
 #  ANTINUKE SYSTEM
 # ══════════════════════════════════════════════════════════
+
+# ── Shared helpers ────────────────────────────────────────
+_an_event_limits: dict = {}
+_an_cooldowns:    dict = {}
+
+def _an_can_act(guild_id, event_name, max_requests=5, interval=10, cooldown_duration=300):
+    from datetime import datetime as _dt
+    now = _dt.now()
+    _an_event_limits.setdefault(guild_id, {}).setdefault(event_name, []).append(now)
+    timestamps = [t for t in _an_event_limits[guild_id][event_name] if (now - t).total_seconds() <= interval]
+    _an_event_limits[guild_id][event_name] = timestamps
+    if guild_id in _an_cooldowns and event_name in _an_cooldowns[guild_id]:
+        if (now - _an_cooldowns[guild_id][event_name]).total_seconds() < cooldown_duration:
+            return False
+        del _an_cooldowns[guild_id][event_name]
+    if len(timestamps) > max_requests:
+        _an_cooldowns.setdefault(guild_id, {})[event_name] = now
+        return False
+    return True
+
+async def _an_fetch(guild, action, target_id=None):
+    try:
+        async for entry in guild.audit_logs(action=action, limit=1):
+            if target_id and entry.target.id != target_id:
+                return None
+            age = (datetime.utcnow() - entry.created_at.replace(tzinfo=None)).total_seconds()
+            if age > 3600:
+                return None
+            return entry
+    except Exception:
+        pass
+    return None
+
+def _an_immune(guild, user_id):
+    return user_id == guild.owner_id or user_id == BOT_OWNER_ID or an_wl(guild.id, user_id)
+
+async def _an_ban(guild, executor, reason, retries=3):
+    while retries > 0:
+        try:
+            await guild.ban(executor, reason=reason, delete_message_days=0)
+            return
+        except discord.Forbidden: return
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(float(e.response.headers.get("Retry-After", 2)))
+                retries -= 1
+            else: return
+        except Exception: return
+
+async def _an_log(guild, title, executor, detail="", result=""):
+    log_id = antinuke_log_channels.get(guild.id)
+    if not log_id: return
+    ch = guild.get_channel(log_id)
+    if not ch: return
+    e = _base(f"🛡️  Antinuke — {title}", color=C_ERROR)
+    e.add_field(name="👤  Executor", value=f"{executor.mention}\n`{executor.id}`", inline=True)
+    e.add_field(name="⚡  Action",   value=title,                                    inline=True)
+    if detail: e.add_field(name="📋  Detail", value=detail, inline=False)
+    if result: e.add_field(name="⚙️  Result", value=result, inline=False)
+    ft(e, "Crimson Gen • Antinuke")
+    try: await ch.send(embed=e)
+    except Exception: pass
+
+# ── Anti-Ban (antiban.py) ─────────────────────────────────
+@bot.event
+async def on_member_ban(guild: discord.Guild, user: discord.User):
+    if not an_on(guild.id): return
+    if not _an_can_act(guild.id, "member_ban"): return
+    entry = await _an_fetch(guild, discord.AuditLogAction.ban, user.id)
+    if not entry: return
+    executor = entry.user
+    if _an_immune(guild, executor.id): return
+    retries = 3
+    while retries > 0:
+        try:
+            await guild.ban(executor, reason="Member Ban | Unwhitelisted User", delete_message_days=0)
+            await guild.unban(user, reason="Reverting ban by unwhitelisted user")
+            break
+        except discord.Forbidden: break
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+            else: break
+        except Exception: break
+    await _an_log(guild, "Anti-Ban", executor, f"Banned: {user}", "Victim unbanned · Executor banned")
+
+# ── Anti-Kick (antikick.py) ───────────────────────────────
+# NOTE: on_member_remove is defined elsewhere for welcome/leave — antikick logic merged there
+
+# ── Anti-Channel Delete (antichdl.py) ────────────────────
 @bot.event
 async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
     guild = channel.guild
     if not an_on(guild.id): return
-    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
-        if entry.user.bot or an_wl(guild.id, entry.user.id): return
-        if an_track(guild.id, entry.user.id):
-            m = guild.get_member(entry.user.id)
-            if m: await an_punish(guild, m, "Mass Channel Deletion", f"Deleted: #{channel.name}")
+    if not _an_can_act(guild.id, "channel_delete"): return
+    entry = await _an_fetch(guild, discord.AuditLogAction.channel_delete, channel.id)
+    if not entry: return
+    executor = entry.user
+    if _an_immune(guild, executor.id): return
+    retries = 3
+    while retries > 0:
+        try:
+            new_ch = await channel.clone(reason="Channel Delete | Unwhitelisted User")
+            await new_ch.edit(position=channel.position)
+            break
+        except discord.Forbidden: break
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+            else: break
+        except Exception: break
+    await _an_ban(guild, executor, "Channel Delete | Unwhitelisted User")
+    await _an_log(guild, "Anti-Channel Delete", executor, f"#{channel.name}", "Channel recreated · Executor banned")
+    await asyncio.sleep(3)
 
+# ── Anti-Channel Create (antichcr.py) ────────────────────
+@bot.event
+async def on_guild_channel_create(channel: discord.abc.GuildChannel):
+    guild = channel.guild
+    if not an_on(guild.id): return
+    if not _an_can_act(guild.id, "channel_create", max_requests=6): return
+    entry = await _an_fetch(guild, discord.AuditLogAction.channel_create, channel.id)
+    if not entry: return
+    executor = entry.user
+    if _an_immune(guild, executor.id): return
+    retries = 3
+    while retries > 0:
+        try:
+            await channel.delete(reason="Channel Create | Unwhitelisted User")
+            await guild.ban(executor, reason="Channel Create | Unwhitelisted User", delete_message_days=0)
+            return
+        except discord.Forbidden: return
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+            else: return
+        except Exception: return
+    await _an_log(guild, "Anti-Channel Create", executor, f"#{channel.name}", "Channel deleted · Executor banned")
+
+# ── Anti-Channel Update (antichup.py) ────────────────────
+@bot.event
+async def on_guild_channel_update(before, after):
+    guild = before.guild
+    if not an_on(guild.id): return
+    if not _an_can_act(guild.id, "channel_update"): return
+    entry = await _an_fetch(guild, discord.AuditLogAction.channel_update, after.id)
+    if not entry: return
+    executor = entry.user
+    if _an_immune(guild, executor.id): return
+    retries = 3
+    while retries > 0:
+        try:
+            kwargs = {"name": before.name, "reason": "Channel Update | Unwhitelisted User"}
+            if hasattr(before, "topic"):      kwargs["topic"]      = before.topic
+            if hasattr(before, "nsfw"):       kwargs["nsfw"]       = before.nsfw
+            if hasattr(before, "bitrate"):    kwargs["bitrate"]    = before.bitrate
+            if hasattr(before, "user_limit"): kwargs["user_limit"] = before.user_limit
+            await after.edit(**kwargs)
+            break
+        except discord.Forbidden: break
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+            else: break
+        except Exception: break
+    await _an_ban(guild, executor, "Channel Update | Unwhitelisted User")
+    await _an_log(guild, "Anti-Channel Update", executor, f"#{before.name}", "Reverted · Executor banned")
+    await asyncio.sleep(3)
+
+# ── Anti-Role Delete (antirldl.py) ───────────────────────
 @bot.event
 async def on_guild_role_delete(role: discord.Role):
     guild = role.guild
     if not an_on(guild.id): return
-    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.role_delete):
-        if entry.user.bot or an_wl(guild.id, entry.user.id): return
-        if an_track(guild.id, entry.user.id):
-            m = guild.get_member(entry.user.id)
-            if m: await an_punish(guild, m, "Mass Role Deletion", f"Deleted role: {role.name}")
+    if not _an_can_act(guild.id, "role_delete"): return
+    entry = await _an_fetch(guild, discord.AuditLogAction.role_delete)
+    if not entry: return
+    executor = entry.user
+    if _an_immune(guild, executor.id): return
+    await _an_ban(guild, executor, "Role Delete | Unwhitelisted User")
+    try:
+        await guild.create_role(
+            name=role.name, permissions=role.permissions,
+            color=role.color, hoist=role.hoist, mentionable=role.mentionable,
+            reason="Role Delete | Unwhitelisted User"
+        )
+    except Exception: pass
+    await _an_log(guild, "Anti-Role Delete", executor, f"@{role.name}", "Role recreated · Executor banned")
+    await asyncio.sleep(2)
 
-@bot.event
-async def on_member_ban(guild: discord.Guild, user: discord.User):
-    if not an_on(guild.id): return
-    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
-        if entry.user.bot or an_wl(guild.id, entry.user.id): return
-        if an_track(guild.id, entry.user.id):
-            m = guild.get_member(entry.user.id)
-            if m: await an_punish(guild, m, "Mass Banning", f"Banned: {user}")
-
-@bot.event
-async def on_guild_update(before: discord.Guild, after: discord.Guild):
-    if not an_on(after.id): return
-    async for entry in after.audit_logs(limit=1, action=discord.AuditLogAction.guild_update):
-        if entry.user.bot or an_wl(after.id, entry.user.id): return
-        if an_track(after.id, entry.user.id):
-            m = after.get_member(entry.user.id)
-            if m: await an_punish(after, m, "Suspicious Server Update", "")
-
-@bot.event
-async def on_webhooks_update(channel: discord.abc.GuildChannel):
-    guild = channel.guild
-    if not an_on(guild.id): return
-    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.webhook_create):
-        if entry.user.bot or an_wl(guild.id, entry.user.id): return
-        if an_track(guild.id, entry.user.id):
-            m = guild.get_member(entry.user.id)
-            if m: await an_punish(guild, m, "Mass Webhook Creation", "")
-
+# ── Anti-Role Create (antirlcr.py) ───────────────────────
 @bot.event
 async def on_guild_role_create(role: discord.Role):
     guild = role.guild
     if not an_on(guild.id): return
-    dangerous = discord.Permissions(administrator=True) | discord.Permissions(manage_guild=True)
-    if not (role.permissions.value & dangerous.value): return
-    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.role_create):
-        if entry.user.bot or an_wl(guild.id, entry.user.id): return
-        if an_track(guild.id, entry.user.id):
-            m = guild.get_member(entry.user.id)
-            if m: await an_punish(guild, m, "Dangerous Role Created", f"Role: {role.name} (admin/manage perms)")
+    if not _an_can_act(guild.id, "role_create"): return
+    entry = await _an_fetch(guild, discord.AuditLogAction.role_create)
+    if not entry: return
+    executor = entry.user
+    if _an_immune(guild, executor.id): return
+    await _an_ban(guild, executor, "Role Create | Unwhitelisted User")
+    try: await role.delete(reason="Role Create | Unwhitelisted User")
+    except Exception: pass
+    await _an_log(guild, "Anti-Role Create", executor, f"@{role.name}", "Role deleted · Executor banned")
+    await asyncio.sleep(3)
 
-# ── Antinuke Commands ──
+# ── Anti-Role Update (antirlup.py) ───────────────────────
+@bot.event
+async def on_guild_role_update(before: discord.Role, after: discord.Role):
+    guild = before.guild
+    if not an_on(guild.id): return
+    if not _an_can_act(guild.id, "role_update"): return
+    entry = await _an_fetch(guild, discord.AuditLogAction.role_update, before.id)
+    if not entry: return
+    executor = entry.user
+    if _an_immune(guild, executor.id): return
+    await _an_ban(guild, executor, "Role Update | Unwhitelisted User")
+    retries = 3
+    while retries > 0:
+        try:
+            await after.edit(
+                name=before.name, permissions=before.permissions,
+                color=before.color, hoist=before.hoist, mentionable=before.mentionable,
+                reason="Role Update | Unwhitelisted User"
+            )
+            break
+        except discord.Forbidden: break
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+            else: break
+        except Exception: break
+    await _an_log(guild, "Anti-Role Update", executor, f"@{before.name}", "Reverted · Executor banned")
+    await asyncio.sleep(3)
+
+# ── Anti-Member Update / Dangerous Role (anti_member_update.py) ──
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    guild = before.guild
+    if not an_on(guild.id): return
+    if not _an_can_act(guild.id, "member_update"): return
+    entry = await _an_fetch(guild, discord.AuditLogAction.member_role_update, after.id)
+    if not entry: return
+    executor = entry.user
+    if _an_immune(guild, executor.id): return
+    try:
+        new_role = next(r for r in after.roles if r not in before.roles)
+    except StopIteration: return
+    if not any([
+        new_role.permissions.ban_members, new_role.permissions.administrator,
+        new_role.permissions.manage_guild, new_role.permissions.manage_channels,
+        new_role.permissions.manage_roles, new_role.permissions.mention_everyone,
+        new_role.permissions.manage_webhooks
+    ]): return
+    retries = 3
+    while retries > 0:
+        try:
+            await after.remove_roles(new_role, reason="Member Role Update with Dangerous Permissions | Unwhitelisted User")
+            await guild.ban(executor, reason="Member Role Update with Dangerous Permissions | Unwhitelisted User", delete_message_days=0)
+            return
+        except discord.Forbidden: return
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+            else: return
+        except Exception: return
+    await _an_log(guild, "Anti-Dangerous Role Grant", executor, f"@{new_role.name} → {after.mention}", "Role removed · Executor banned")
+    await asyncio.sleep(3)
+
+# ── Anti-Guild Update (antiguild.py) ─────────────────────
+@bot.event
+async def on_guild_update(before: discord.Guild, after: discord.Guild):
+    if not an_on(after.id): return
+    if not _an_can_act(after.id, "guild_update"): return
+    entry = await _an_fetch(after, discord.AuditLogAction.guild_update)
+    if not entry: return
+    executor = entry.user
+    if _an_immune(after, executor.id): return
+    # Ban executor
+    retries = 3
+    while retries > 0:
+        try:
+            await after.ban(executor, reason="Guild Update | Unwhitelisted User", delete_message_days=0)
+            break
+        except discord.Forbidden: break
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+            else: break
+        except Exception: break
+    # Revert changes
+    retries = 3
+    while retries > 0:
+        try:
+            kwargs = {}
+            if before.name != after.name: kwargs["name"] = before.name
+            if before.icon != after.icon: kwargs["icon"] = before.icon
+            if before.splash != after.splash: kwargs["splash"] = before.splash
+            if before.banner != after.banner: kwargs["banner"] = before.banner
+            if kwargs: await after.edit(**kwargs, reason="Guild Update | Unwhitelisted User")
+            break
+        except discord.Forbidden: break
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+            else: break
+        except Exception: break
+    await _an_log(after, "Anti-Guild Update", executor, "", "Reverted · Executor banned")
+    await asyncio.sleep(3)
+
+# ── Anti-Webhook Update (antiwebhook.py) ─────────────────
+@bot.event
+async def on_webhooks_update(channel: discord.abc.GuildChannel):
+    guild = channel.guild
+    if not an_on(guild.id): return
+    if not _an_can_act(guild.id, "webhook_update", max_requests=6): return
+    entry = await _an_fetch(guild, discord.AuditLogAction.webhook_update)
+    if entry:
+        executor = entry.user
+        if not _an_immune(guild, executor.id):
+            retries = 3
+            while retries > 0:
+                try:
+                    await guild.ban(executor, reason="Webhook Update | Unwhitelisted User", delete_message_days=0)
+                    if entry.target:
+                        try: await entry.target.delete(reason="Webhook updated by unwhitelisted user")
+                        except Exception: pass
+                    break
+                except discord.Forbidden: break
+                except discord.HTTPException as e:
+                    if e.status == 429:
+                        await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+                    else: break
+                except Exception: break
+            await _an_log(guild, "Anti-Webhook Update", executor, f"#{channel.name}", "Executor banned")
+            await asyncio.sleep(3)
+            return
+    # Also check webhook create
+    entry = await _an_fetch(guild, discord.AuditLogAction.webhook_create)
+    if entry:
+        executor = entry.user
+        if not _an_immune(guild, executor.id):
+            retries = 3
+            while retries > 0:
+                try:
+                    await guild.ban(executor, reason="Webhook Create | Unwhitelisted User", delete_message_days=0)
+                    if entry.target:
+                        try: await entry.target.delete(reason="Webhook created by unwhitelisted user")
+                        except Exception: pass
+                    break
+                except discord.Forbidden: break
+                except discord.HTTPException as e:
+                    if e.status == 429:
+                        await asyncio.sleep(float(e.response.headers.get("Retry-After", 2))); retries -= 1
+                    else: break
+                except Exception: break
+            await _an_log(guild, "Anti-Webhook Create", executor, f"#{channel.name}", "Webhook deleted · Executor banned")
+            await asyncio.sleep(3)
+            return
+    # Also check webhook delete
+    entry = await _an_fetch(guild, discord.AuditLogAction.webhook_delete)
+    if entry:
+        executor = entry.user
+        if not _an_immune(guild, executor.id):
+            await _an_ban(guild, executor, "Webhook Delete | Unwhitelisted User")
+            await _an_log(guild, "Anti-Webhook Delete", executor, f"#{channel.name}", "Executor banned")
+            await asyncio.sleep(3)
+
+# ── Anti-Integration (antiIntegration.py) ────────────────
+@bot.event
+async def on_guild_integrations_update(guild: discord.Guild):
+    if not an_on(guild.id): return
+    if not _an_can_act(guild.id, "integration_create", max_requests=6): return
+    entry = await _an_fetch(guild, discord.AuditLogAction.integration_create)
+    if not entry: return
+    executor = entry.user
+    if _an_immune(guild, executor.id): return
+    await _an_ban(guild, executor, "Integration Create | Unwhitelisted User")
+    await _an_log(guild, "Anti-Integration", executor, "", "Executor banned")
+
+# ── Anti-Prune (antiprune.py) ─────────────────────────────
+# Handled in on_member_remove below alongside antikick
+
+# ── Anti-Everyone (antieveryone.py) ──────────────────────
+# Handled in on_message — timeout + delete @everyone messages
+
+# ── Antinuke Commands ─────────────────────────────────────
 @bot.tree.command(name="antinuke", description="Toggle antinuke server protection")
 @app_commands.checks.has_permissions(administrator=True)
 async def antinuke(interaction: discord.Interaction):
-    gid = interaction.guild.id
+    gid    = interaction.guild.id
     now_on = not antinuke_enabled.get(gid, False)
     antinuke_enabled[gid] = now_on
     log_id = antinuke_log_channels.get(gid)
@@ -1926,22 +2319,29 @@ async def antinuke(interaction: discord.Interaction):
     e.add_field(
         name="🔒  Active Protections",
         value=(
-            "› Mass channel deletion\n"
-            "› Mass role deletion\n"
-            "› Mass bans\n"
-            "› Mass webhook creation\n"
-            "› Dangerous role creation\n"
-            "› Suspicious server updates\n"
-            "› Unauthorised bot additions"
+            "› Anti-Ban + unban victim\n"
+            "› Anti-Kick\n"
+            "› Anti-Channel Delete + recreate\n"
+            "› Anti-Channel Create\n"
+            "› Anti-Channel Update + revert\n"
+            "› Anti-Role Delete + recreate\n"
+            "› Anti-Role Create\n"
+            "› Anti-Role Update + revert\n"
+            "› Anti-Dangerous Role Grant\n"
+            "› Anti-Guild Update + revert\n"
+            "› Anti-Webhook Create/Update/Delete\n"
+            "› Anti-Integration\n"
+            "› Anti-Prune\n"
+            "› Anti-Everyone Mention\n"
+            "› Anti-Bot Add"
         ),
         inline=True
     )
     e.add_field(
         name="⚙️  Configuration",
         value=(
-            f"Threshold: `{AN_THRESHOLD}` actions\n"
-            f"Window: `{AN_TIMEFRAME}s`\n"
-            f"Punishment: Derole + Ban\n"
+            f"Punishment: Instant ban\n"
+            f"Revert: Yes (where possible)\n"
             f"Log: {f'<#{log_id}>' if log_id else 'Not set'}"
         ),
         inline=True
@@ -1957,12 +2357,9 @@ async def antinuke_status(interaction: discord.Interaction):
     wl      = antinuke_wl.get(gid, [])
     log_id  = antinuke_log_channels.get(gid)
     e = _base("🛡️  Antinuke Status Dashboard", color=C_SUCCESS if enabled else C_ERROR)
-    e.add_field(name="⚡ Status",       value="🟢 Enabled"   if enabled else "🔴 Disabled",        inline=True)
-    e.add_field(name="📋 Log Channel",  value=f"<#{log_id}>" if log_id  else "Not set",              inline=True)
-    e.add_field(name="⚙️ Threshold",   value=f"`{AN_THRESHOLD}` actions / `{AN_TIMEFRAME}s`",        inline=True)
-    e.add_field(name="⚠️ Punishment",   value="Roles stripped → Banned",                             inline=True)
-    e.add_field(name="📬 DM on Ban",    value="✅ Yes",                                               inline=True)
-    e.add_field(name="\u200b",          value="\u200b",                                               inline=True)
+    e.add_field(name="⚡ Status",      value="🟢 Enabled" if enabled else "🔴 Disabled", inline=True)
+    e.add_field(name="📋 Log Channel", value=f"<#{log_id}>" if log_id else "Not set",    inline=True)
+    e.add_field(name="⚠️ Punishment",  value="Instant ban + revert",                     inline=True)
     wl_str = "\n".join(f"› <@{uid}>" for uid in wl) or "No whitelisted users."
     e.add_field(name=f"✅  Whitelist ({len(wl)} users)", value=wl_str, inline=False)
     ft(e, "Crimson Gen • Antinuke", interaction.guild.me.display_avatar.url)
@@ -1972,18 +2369,18 @@ async def antinuke_status(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(administrator=True)
 @app_commands.describe(user="User to whitelist or unwhitelist", action="Add or remove")
 @app_commands.choices(action=[
-    app_commands.Choice(name="✅ Add to whitelist",       value="add"),
-    app_commands.Choice(name="❌ Remove from whitelist",  value="remove"),
+    app_commands.Choice(name="✅ Add to whitelist",      value="add"),
+    app_commands.Choice(name="❌ Remove from whitelist", value="remove"),
 ])
 async def antinuke_whitelist_cmd(interaction: discord.Interaction, user: discord.Member, action: str):
     gid = interaction.guild.id
     antinuke_wl.setdefault(gid, [])
     if action == "add":
         if user.id not in antinuke_wl[gid]: antinuke_wl[gid].append(user.id)
-        e = ok("Whitelisted", f"{user.mention} has been added to the antinuke whitelist.\nThey can now perform actions without triggering antinuke.")
+        e = ok("Whitelisted", f"{user.mention} added to antinuke whitelist.")
     else:
         if user.id in antinuke_wl[gid]: antinuke_wl[gid].remove(user.id)
-        e = ok("Removed from Whitelist", f"{user.mention} has been removed from the antinuke whitelist.")
+        e = ok("Removed", f"{user.mention} removed from antinuke whitelist.")
     e.set_thumbnail(url=user.display_avatar.url)
     ft(e, "Crimson Gen • Antinuke", interaction.guild.me.display_avatar.url)
     await interaction.response.send_message(embed=e, ephemeral=True)
