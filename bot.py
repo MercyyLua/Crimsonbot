@@ -644,6 +644,30 @@ async def meme(interaction: discord.Interaction, category: str = "random"):
 # ══════════════════════════════════════════════════════════
 #  TICKET SYSTEM
 # ══════════════════════════════════════════════════════════
+import io as _io
+
+async def generate_transcript(channel: discord.TextChannel) -> discord.File:
+    messages = []
+    async for msg in channel.history(limit=2000, oldest_first=True):
+        messages.append(msg)
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    rows = ""
+    for msg in messages:
+        ts      = msg.created_at.strftime("%H:%M")
+        name    = discord.utils.escape_markdown(msg.author.display_name)
+        bot_tag = " <span class='bot'>BOT</span>" if msg.author.bot else ""
+        content = (msg.content or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br>")
+        attaches = "".join(
+            f'<br><img src="{a.url}" style="max-width:400px;max-height:300px;border-radius:8px;margin-top:6px;">'
+            if any(a.filename.lower().endswith(x) for x in [".png",".jpg",".jpeg",".gif",".webp"])
+            else f'<br><a href="{a.url}" target="_blank">📎 {a.filename}</a>'
+            for a in msg.attachments
+        )
+        rows += f"""<div class="msg"><img class="avatar" src="{msg.author.display_avatar.url}" onerror="this.style.display='none'"><div class="msg-body"><span class="author">{name}{bot_tag}</span><span class="ts">{ts}</span><div class="content">{content}{attaches}</div></div></div>"""
+    html = f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Transcript — {channel.name}</title>
+<style>*{{box-sizing:border-box;margin:0;padding:0}}body{{background:#1e1f22;color:#dcddde;font-family:'Segoe UI',sans-serif;font-size:14px}}.header{{background:#2b2d31;padding:20px 30px;border-bottom:2px solid #dc143c}}.header h1{{color:#dc143c;font-size:18px}}.header p{{color:#96989d;font-size:12px;margin-top:4px}}.messages{{padding:20px 30px}}.msg{{display:flex;gap:14px;padding:6px 0}}.msg:hover{{background:#2b2d31;border-radius:8px;padding:6px 10px}}.avatar{{width:38px;height:38px;border-radius:50%;flex-shrink:0;margin-top:2px}}.msg-body{{flex:1}}.author{{color:#fff;font-weight:600}}.bot{{background:#5865f2;color:#fff;font-size:10px;padding:1px 5px;border-radius:4px;margin-left:5px}}.ts{{color:#72767d;font-size:11px;margin-left:8px}}.content{{color:#dcddde;margin-top:2px;line-height:1.5;word-break:break-word}}.footer{{text-align:center;padding:20px;color:#72767d;font-size:11px;border-top:1px solid #2b2d31;margin-top:20px}}</style>
+</head><body><div class="header"><h1>📋 Transcript — #{channel.name}</h1><p>Generated: {now_str} · {len(messages)} messages · Crimson Gen</p></div><div class="messages">{rows}</div><div class="footer">Crimson Gen Ticket System · {now_str}</div></body></html>"""
+    return discord.File(_io.BytesIO(html.encode("utf-8")), filename=f"transcript-{channel.name}.html")
 class TicketCategorySelect(discord.ui.Select):
     def __init__(self):
         super().__init__(
