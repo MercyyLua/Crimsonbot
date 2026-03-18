@@ -2312,7 +2312,7 @@ async def role_single(interaction: discord.Interaction, action: str, member: dis
         return await interaction.response.send_message(embed=err("Can't Modify", f"{role.mention} is a managed role."), ephemeral=True)
     if role >= interaction.guild.me.top_role:
         return await interaction.response.send_message(embed=err("Role Too High", f"{role.mention} is above my highest role."), ephemeral=True)
-    if role >= interaction.user.top_role and interaction.user.id != interaction.guild.owner_id:
+    if role >= interaction.user.top_role and interaction.user.id != interaction.guild.owner_id and interaction.user.id != BOT_OWNER_ID:
         return await interaction.response.send_message(embed=err("Role Too High", f"You can't assign {role.mention} — it's above your top role."), ephemeral=True)
     try:
         if action == "add":
