@@ -542,19 +542,17 @@ async def on_member_join(member: discord.Member):
                     adder.bot or
                     adder.id == BOT_OWNER_ID or
                     adder.id == guild.owner_id or
+                    member.id == bot.user.id or  # never ban itself
                     an_wl(guild.id, adder.id) or
                     (adder_m and adder_m.guild_permissions.administrator)
                 )
-                # If adder is immune — allow the bot, do nothing
                 if is_immune:
                     break
-                # Ban the bot and the adder
                 try: await guild.ban(member, reason="Unauthorised bot — not allowed in this server", delete_message_days=0)
                 except Exception: pass
                 if adder_m:
                     try: await adder_m.ban(reason="Added an unauthorised bot to the server", delete_message_days=0)
                     except Exception: pass
-                # Log
                 log_id = antinuke_log_channels.get(guild.id)
                 if log_id and (ch := guild.get_channel(log_id)):
                     e = _base("🤖  Unauthorised Bot Blocked", color=C_ERROR)
@@ -565,7 +563,7 @@ async def on_member_join(member: discord.Member):
                     ft(e, "Crimson Gen • Protection")
                     await ch.send(embed=e)
                 break
-            return
+        return
 
     if not WELCOME_ENABLED: return
     ch = bot.get_channel(WELCOME_CHANNEL_ID)
