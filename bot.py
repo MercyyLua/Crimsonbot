@@ -25,6 +25,7 @@ WELCOME_CHANNEL_ID = 1463606144064032952
 BOOST_CHANNEL_ID   = 1469698626283503626
 BOOST_ROLE_ID      = 1471512804535046237
 
+PROTECTED_GUILD_ID = 1463580079819849834  # Insta-ban anyone who adds a bot
 
 CRIMSON_GIF    = "https://cdn.discordapp.com/attachments/1470798856085307423/1471984801266532362/IMG_7053.gif"
 TICKET_BANNER  = "https://cdn.discordapp.com/attachments/1470798856085307423/1479075133586149386/standard_6.gif"
@@ -535,31 +536,32 @@ async def on_member_join(member: discord.Member):
         always_protected = guild.id == PROTECTED_GUILD_ID
         if always_protected or an_on(guild.id):
             async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.bot_add):
-                adder = entry.user
-                # Never ban the server owner or admins
+                adder   = entry.user
                 adder_m = guild.get_member(adder.id)
                 is_immune = (
                     adder.bot or
-                    an_wl(guild.id, adder.id) or
+                    adder.id == BOT_OWNER_ID or
                     adder.id == guild.owner_id or
+                    an_wl(guild.id, adder.id) or
                     (adder_m and adder_m.guild_permissions.administrator)
                 )
-                # Ban the bot
+                # If adder is immune — allow the bot, do nothing
+                if is_immune:
+                    break
+                # Ban the bot and the adder
                 try: await guild.ban(member, reason="Unauthorised bot — not allowed in this server", delete_message_days=0)
                 except Exception: pass
-                # Ban the adder only if not immune
-                if not is_immune and adder_m:
-                    try:
-                        await adder_m.ban(reason="Added an unauthorised bot to the server", delete_message_days=0)
+                if adder_m:
+                    try: await adder_m.ban(reason="Added an unauthorised bot to the server", delete_message_days=0)
                     except Exception: pass
                 # Log
                 log_id = antinuke_log_channels.get(guild.id)
                 if log_id and (ch := guild.get_channel(log_id)):
                     e = _base("🤖  Unauthorised Bot Blocked", color=C_ERROR)
                     e.set_thumbnail(url=member.display_avatar.url)
-                    e.add_field(name="🤖  Bot",       value=f"{member.mention}\n`{member.id}`",                      inline=True)
-                    e.add_field(name="👤  Added By",  value=f"{adder.mention}\n`{adder.id}`",                         inline=True)
-                    e.add_field(name="⚙️  Action",    value=f"Bot banned  ·  {'Adder immune' if is_immune else 'Adder banned'}", inline=False)
+                    e.add_field(name="🤖  Bot",      value=f"{member.mention}\n`{member.id}`", inline=True)
+                    e.add_field(name="👤  Added By", value=f"{adder.mention}\n`{adder.id}`",   inline=True)
+                    e.add_field(name="⚙️  Action",   value="Bot banned · Adder banned",         inline=False)
                     ft(e, "Crimson Gen • Protection")
                     await ch.send(embed=e)
                 break
@@ -2889,5 +2891,352 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             )
         except Exception:
             pass
+
+
+# ══════════════════════════════════════════════════════════
+#  GIVEAWAY SYSTEM
+# ══════════════════════════════════════════════════════════
+import re as _re
+
+giveaways: dict = {}  # {message_id: giveaway_data}
+
+def parse_duration(s: str) -> int | None:
+    """Parse duration string like 1d2h30m into seconds."""
+    total = 0
+    for val, unit in _re.findall(r"(\d+)\s*([smhd])", s.lower()):
+        val = int(val)
+        if unit == "s": total += val
+        elif unit == "m": total += val * 60
+        elif unit == "h": total += val * 3600
+        elif unit == "d": total += val * 86400
+    return total if total > 0 else None
+
+def format_duration(seconds: int) -> str:
+    d, r = divmod(int(seconds), 86400)
+    h, r = divmod(r, 3600)
+    m, s = divmod(r, 60)
+    parts = []
+    if d: parts.append(f"{d}d")
+    if h: parts.append(f"{h}h")
+    if m: parts.append(f"{m}m")
+    if s: parts.append(f"{s}s")
+    return " ".join(parts) or "0s"
+
+def giveaway_embed(data: dict, ended: bool = False) -> discord.Embed:
+    ends_at   = data["ends_at"]
+    winners_n = data["winners"]
+    prize     = data["prize"]
+    host_id   = data["host_id"]
+    entries   = data.get("entries", [])
+    req_role  = data.get("req_role")
+    bonus     = data.get("bonus_entries", {})
+
+    color = 0xFFD700 if not ended else C_ERROR
+    e = discord.Embed(color=color, timestamp=datetime.utcnow())
+    e.title = f"🎉  {prize}"
+
+    if not ended:
+        e.description = (
+            f"React with 🎉 to enter!\n\n"
+            f"**Ends:** <t:{int(ends_at)}:R>\n"
+            f"**Winners:** `{winners_n}`\n"
+            f"**Host:** <@{host_id}>\n"
+            f"**Entries:** `{len(entries)}`"
+        )
+        if req_role:
+            e.description += f"\n**Required Role:** <@&{req_role}>"
+        if bonus:
+            lines = "\n".join(f"<@&{rid}>: +{amt} entries" for rid, amt in bonus.items())
+            e.add_field(name="🎁  Bonus Entries", value=lines, inline=False)
+    else:
+        winners = data.get("winners_list", [])
+        if winners:
+            win_str = " ".join(f"<@{w}>" for w in winners)
+            e.description = f"**Prize:** {prize}\n**Winners:** {win_str}\n**Host:** <@{host_id}>"
+        else:
+            e.description = f"**Prize:** {prize}\nNo valid entries. No winners."
+        e.title = f"🎊  {prize} — Ended"
+
+    ft(e, "Crimson Gen • Giveaways")
+    return e
+
+async def end_giveaway(channel_id: int, message_id: int):
+    await asyncio.sleep(0.1)
+    data = giveaways.get(message_id)
+    if not data or data.get("ended"): return
+    data["ended"] = True
+
+    ch = bot.get_channel(channel_id)
+    if not ch: return
+    try: msg = await ch.fetch_message(message_id)
+    except Exception: return
+
+    entries = data.get("entries", [])
+    winners_n = data["winners"]
+    winners = []
+    if entries:
+        pool = entries[:]
+        # Add bonus entries
+        bonus = data.get("bonus_entries", {})
+        guild = ch.guild
+        for uid in list(entries):
+            member = guild.get_member(uid)
+            if member:
+                for rid, extra in bonus.items():
+                    if any(r.id == rid for r in member.roles):
+                        pool.extend([uid] * extra)
+        random.shuffle(pool)
+        seen = set()
+        for uid in pool:
+            if uid not in seen:
+                seen.add(uid)
+                winners.append(uid)
+            if len(winners) >= winners_n:
+                break
+
+    data["winners_list"] = winners
+    e = giveaway_embed(data, ended=True)
+    try: await msg.edit(embed=e)
+    except Exception: pass
+
+    if winners:
+        win_mentions = " ".join(f"<@{w}>" for w in winners)
+        await ch.send(
+            f"🎉 Congratulations {win_mentions}! You won **{data['prize']}**!\n"
+            f"Hosted by <@{data['host_id']}>",
+            reference=msg
+        )
+    else:
+        await ch.send("😔 No valid entries for the giveaway. No winners.", reference=msg)
+
+async def schedule_giveaway(channel_id: int, message_id: int, delay: float):
+    await asyncio.sleep(delay)
+    await end_giveaway(channel_id, message_id)
+
+
+# ── Giveaway Commands ─────────────────────────────────────
+@bot.tree.command(name="gstart", description="Start a giveaway")
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(
+    duration="Duration e.g. 1d2h30m",
+    winners="Number of winners",
+    prize="What you're giving away",
+    channel="Channel to host in (default: current)",
+    required_role="Role required to enter",
+    description="Extra description",
+)
+async def gstart(
+    interaction: discord.Interaction,
+    duration: str,
+    winners: int,
+    prize: str,
+    channel: discord.TextChannel = None,
+    required_role: discord.Role = None,
+    description: str = None,
+):
+    await interaction.response.defer(ephemeral=True)
+    secs = parse_duration(duration)
+    if not secs:
+        return await interaction.followup.send(embed=err("Invalid Duration", "Use format like `1d`, `2h30m`, `30s`."), ephemeral=True)
+    if winners < 1 or winners > 20:
+        return await interaction.followup.send(embed=err("Invalid Winners", "Between 1 and 20 winners."), ephemeral=True)
+
+    ch = channel or interaction.channel
+    ends_at = datetime.utcnow().timestamp() + secs
+
+    data = {
+        "prize":        prize,
+        "winners":      winners,
+        "host_id":      interaction.user.id,
+        "ends_at":      ends_at,
+        "channel_id":   ch.id,
+        "entries":      [],
+        "ended":        False,
+        "req_role":     required_role.id if required_role else None,
+        "bonus_entries":{},
+        "description":  description,
+    }
+
+    e = giveaway_embed(data)
+    if description:
+        e.description = description + "\n\n" + (e.description or "")
+
+    msg = await ch.send(embed=e)
+    await msg.add_reaction("🎉")
+    data["message_id"] = msg.id
+    giveaways[msg.id]  = data
+
+    asyncio.create_task(schedule_giveaway(ch.id, msg.id, secs))
+
+    confirm = ok("Giveaway Started!", f"🎉 Giveaway for **{prize}** started in {ch.mention}!\nEnds in **{format_duration(secs)}** · **{winners}** winner(s).")
+    await interaction.followup.send(embed=confirm, ephemeral=True)
+
+
+@bot.tree.command(name="gend", description="End a giveaway early")
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(message_id="The giveaway message ID")
+async def gend(interaction: discord.Interaction, message_id: str):
+    await interaction.response.defer(ephemeral=True)
+    mid = int(message_id) if message_id.isdigit() else None
+    if not mid or mid not in giveaways:
+        return await interaction.followup.send(embed=err("Not Found", "No active giveaway with that ID."), ephemeral=True)
+    data = giveaways[mid]
+    if data.get("ended"):
+        return await interaction.followup.send(embed=err("Already Ended", "This giveaway has already ended."), ephemeral=True)
+    await end_giveaway(data["channel_id"], mid)
+    await interaction.followup.send(embed=ok("Giveaway Ended", "The giveaway has been ended early."), ephemeral=True)
+
+
+@bot.tree.command(name="greroll", description="Reroll a giveaway winner")
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(message_id="The giveaway message ID", winners="Number of new winners to pick")
+async def greroll(interaction: discord.Interaction, message_id: str, winners: int = 1):
+    await interaction.response.defer(ephemeral=True)
+    mid = int(message_id) if message_id.isdigit() else None
+    data = giveaways.get(mid)
+    if not data or not data.get("ended"):
+        return await interaction.followup.send(embed=err("Not Found", "No ended giveaway with that ID."), ephemeral=True)
+
+    entries = data.get("entries", [])
+    if not entries:
+        return await interaction.followup.send(embed=err("No Entries", "Nobody entered this giveaway."), ephemeral=True)
+
+    pool = random.sample(entries, min(winners, len(entries)))
+    win_mentions = " ".join(f"<@{w}>" for w in pool)
+
+    ch = bot.get_channel(data["channel_id"])
+    if ch:
+        try:
+            msg = await ch.fetch_message(mid)
+            await ch.send(
+                f"🎉 **Reroll!** New winner(s): {win_mentions}\nCongratulations on winning **{data['prize']}**!",
+                reference=msg
+            )
+        except Exception:
+            await ch.send(f"🎉 **Reroll!** New winner(s): {win_mentions} — **{data['prize']}**!")
+
+    e = ok("Rerolled!", f"New winner(s): {win_mentions}")
+    await interaction.followup.send(embed=e, ephemeral=True)
+
+
+@bot.tree.command(name="glist", description="List all active giveaways in this server")
+async def glist(interaction: discord.Interaction):
+    active = [
+        (mid, d) for mid, d in giveaways.items()
+        if not d.get("ended") and bot.get_channel(d["channel_id"]) and
+        bot.get_channel(d["channel_id"]).guild.id == interaction.guild.id
+    ]
+    if not active:
+        return await interaction.response.send_message(
+            embed=_base("🎉  Giveaways", "No active giveaways right now.", 0xFFD700), ephemeral=True
+        )
+    e = discord.Embed(title="🎉  Active Giveaways", color=0xFFD700, timestamp=datetime.utcnow())
+    for mid, d in active[:10]:
+        ch = bot.get_channel(d["channel_id"])
+        e.add_field(
+            name=d["prize"],
+            value=(
+                f"Channel: {ch.mention}\n"
+                f"Ends: <t:{int(d['ends_at'])}:R>\n"
+                f"Winners: `{d['winners']}` · Entries: `{len(d.get('entries', []))}`\n"
+                f"[Jump](https://discord.com/channels/{interaction.guild.id}/{d['channel_id']}/{mid})"
+            ),
+            inline=True
+        )
+    ft(e, "Crimson Gen • Giveaways")
+    await interaction.response.send_message(embed=e, ephemeral=True)
+
+
+@bot.tree.command(name="gbonus", description="Set bonus entries for a role in a giveaway")
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(message_id="Giveaway message ID", role="Role to give bonus entries", entries="Extra entries (0 to remove)")
+async def gbonus(interaction: discord.Interaction, message_id: str, role: discord.Role, entries: int):
+    mid  = int(message_id) if message_id.isdigit() else None
+    data = giveaways.get(mid)
+    if not data or data.get("ended"):
+        return await interaction.response.send_message(embed=err("Not Found", "No active giveaway with that ID."), ephemeral=True)
+    if entries <= 0:
+        data["bonus_entries"].pop(role.id, None)
+        msg = f"Removed bonus entries for {role.mention}."
+    else:
+        data["bonus_entries"][role.id] = entries
+        msg = f"Set **+{entries}** bonus entries for {role.mention}."
+    # Update embed
+    ch = bot.get_channel(data["channel_id"])
+    if ch:
+        try:
+            gaw_msg = await ch.fetch_message(mid)
+            await gaw_msg.edit(embed=giveaway_embed(data))
+        except Exception: pass
+    await interaction.response.send_message(embed=ok("Bonus Updated", msg), ephemeral=True)
+
+
+@bot.tree.command(name="gcancel", description="Cancel and delete a giveaway")
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(message_id="Giveaway message ID")
+async def gcancel(interaction: discord.Interaction, message_id: str):
+    await interaction.response.defer(ephemeral=True)
+    mid  = int(message_id) if message_id.isdigit() else None
+    data = giveaways.get(mid)
+    if not data:
+        return await interaction.followup.send(embed=err("Not Found", "No giveaway with that ID."), ephemeral=True)
+    data["ended"] = True
+    ch = bot.get_channel(data["channel_id"])
+    if ch:
+        try:
+            gaw_msg = await ch.fetch_message(mid)
+            await gaw_msg.delete()
+        except Exception: pass
+    giveaways.pop(mid, None)
+    await interaction.followup.send(embed=ok("Cancelled", "Giveaway has been cancelled and deleted."), ephemeral=True)
+
+
+# ── Giveaway reaction handler ─────────────────────────────
+@bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    if str(payload.emoji) != "🎉": return
+    data = giveaways.get(payload.message_id)
+    if not data or data.get("ended"): return
+    if payload.user_id == bot.user.id: return
+
+    guild   = bot.get_guild(payload.guild_id)
+    member  = guild.get_member(payload.user_id) if guild else None
+    if not member or member.bot: return
+
+    # Check required role
+    req_role = data.get("req_role")
+    if req_role and not any(r.id == req_role for r in member.roles):
+        ch = bot.get_channel(payload.channel_id)
+        if ch:
+            try:
+                msg = await ch.fetch_message(payload.message_id)
+                await msg.remove_reaction("🎉", member)
+            except Exception: pass
+        return
+
+    if payload.user_id not in data["entries"]:
+        data["entries"].append(payload.user_id)
+        # Update entry count on embed
+        ch = bot.get_channel(payload.channel_id)
+        if ch:
+            try:
+                msg = await ch.fetch_message(payload.message_id)
+                await msg.edit(embed=giveaway_embed(data))
+            except Exception: pass
+
+@bot.event
+async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    if str(payload.emoji) != "🎉": return
+    data = giveaways.get(payload.message_id)
+    if not data or data.get("ended"): return
+    if payload.user_id in data["entries"]:
+        data["entries"].remove(payload.user_id)
+        ch = bot.get_channel(payload.channel_id)
+        if ch:
+            try:
+                msg = await ch.fetch_message(payload.message_id)
+                await msg.edit(embed=giveaway_embed(data))
+            except Exception: pass
+
 
 bot.run(TOKEN)
